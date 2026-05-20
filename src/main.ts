@@ -1,4 +1,23 @@
-import { Copy, Github, KeyRound, PlugZap, RefreshCw, type IconNode } from "lucide";
+import {
+  AlertTriangle,
+  BookOpen,
+  CheckCircle,
+  Copy,
+  Github,
+  GitBranch,
+  KeyRound,
+  Lock,
+  Mail,
+  PlugZap,
+  RefreshCw,
+  ShieldCheck,
+  SquareTerminal,
+  Star,
+  Terminal,
+  User,
+  Zap,
+  type IconNode
+} from "lucide";
 import "./styles.css";
 
 type SignupResponse = {
@@ -16,7 +35,25 @@ type SignupResponse = {
   };
 };
 
-const icons = { Copy, Github, KeyRound, PlugZap, RefreshCw };
+const icons = {
+  AlertTriangle,
+  BookOpen,
+  CheckCircle,
+  Copy,
+  Github,
+  GitBranch,
+  KeyRound,
+  Lock,
+  Mail,
+  PlugZap,
+  RefreshCw,
+  ShieldCheck,
+  SquareTerminal,
+  Star,
+  Terminal,
+  User,
+  Zap
+};
 
 for (const icon of document.querySelectorAll<HTMLElement>("[data-lucide]")) {
   const name = icon.dataset.lucide || "";
@@ -71,10 +108,24 @@ function setBusy(busy: boolean) {
   if (label) label.textContent = busy ? "Connecting" : "Connect";
 }
 
+const DEFAULT_STATUS = "Keys are encrypted at rest. We never store them in plain text.";
+
 function setStatus(message: string, tone?: "ok" | "err") {
   if (!status) return;
-  status.textContent = message;
-  status.dataset.tone = tone || "";
+  const isDefault = message === "";
+  const text = status.querySelector<HTMLElement>(".status-text");
+  if (text) text.textContent = isDefault ? DEFAULT_STATUS : message;
+  status.dataset.tone = isDefault ? "" : tone || "";
+  const iconSvg = status.querySelector("svg");
+  if (iconSvg) {
+    const nextIcon = tone === "err" ? AlertTriangle : tone === "ok" ? CheckCircle : Lock;
+    iconSvg.outerHTML = iconToSvg(nextIcon, {
+      width: 14,
+      height: 14,
+      class: "status-icon",
+      "aria-hidden": "true"
+    });
+  }
 }
 
 function renderDashboard(data: SignupResponse) {
@@ -161,6 +212,33 @@ function escapeHtml(value: string) {
 function escapeAttr(value: string) {
   return escapeHtml(value).replaceAll("`", "&#096;");
 }
+
+const starValue = document.querySelector<HTMLElement>("#star-value");
+
+function formatStars(count: number) {
+  if (count >= 1000) {
+    const thousands = count / 1000;
+    return `${thousands.toFixed(thousands >= 10 ? 0 : 1).replace(/\.0$/, "")}k`;
+  }
+  return String(count);
+}
+
+async function loadStars() {
+  if (!starValue) return;
+  try {
+    const response = await fetch("https://api.github.com/repos/standardagents/composer-api", {
+      headers: { Accept: "application/vnd.github+json" }
+    });
+    if (!response.ok) throw new Error(`GitHub responded ${response.status}`);
+    const data = (await response.json()) as { stargazers_count?: number };
+    if (typeof data.stargazers_count !== "number") throw new Error("Missing star count");
+    starValue.textContent = formatStars(data.stargazers_count);
+  } catch {
+    starValue.textContent = "Stars";
+  }
+}
+
+void loadStars();
 
 function iconToSvg(icon: IconNode, attrs: Record<string, string | number>) {
   const attrText = Object.entries({

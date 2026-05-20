@@ -3,42 +3,92 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Composer API</title>
-    <meta name="description" content="OpenAI-compatible API endpoints for Cursor Composer." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#1c1d18" />
+    <title>The missing Composer 2.5 API</title>
+    <meta name="description" content="Chat completions and responses api for composer 2.5." />
   </head>
   <body>
+    <div class="bg-grid" aria-hidden="true"></div>
+
     <main id="app">
       <section class="shell">
         <header class="topbar">
-          <div>
-            <p class="eyebrow">Standard Agents</p>
-            <h1>Composer API</h1>
-          </div>
-          <a class="repo-link" href="https://github.com/standardagents/composer-api" target="_blank" rel="noreferrer">
-            <i data-lucide="github"></i>
-            <span>GitHub</span>
+          <a class="brand" href="/" aria-label="Standard Agents Composer API">
+            <img class="brand-logo" src="/standard-agents-logo.svg" alt="Standard Agents" />
+            <span class="brand-divider" aria-hidden="true"></span>
+            <span class="brand-product">Composer&nbsp;API</span>
           </a>
+
+          <nav class="top-actions" aria-label="Primary">
+            <a class="docs-link" href="https://github.com/standardagents/composer-api#readme" target="_blank" rel="noreferrer">
+              <i data-lucide="book-open"></i>
+              <span>Docs</span>
+            </a>
+            <a
+              id="repo-link"
+              class="repo-link"
+              href="https://github.com/standardagents/composer-api"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <i data-lucide="github"></i>
+              <span>GitHub</span>
+              <span class="star-pill" aria-label="GitHub stars">
+                <i data-lucide="star"></i>
+                <span id="star-value">—</span>
+              </span>
+            </a>
+          </nav>
         </header>
+
+        <section class="hero" aria-labelledby="hero-title">
+          <span class="hero-badge">
+            <i data-lucide="zap"></i>
+            OpenAI-compatible &middot; Cloudflare Workers
+          </span>
+          <h1 id="hero-title">The missing Composer 2.5 API</h1>
+          <p class="subtitle">Chat completions and responses api for composer 2.5</p>
+
+          <ul class="hero-points">
+            <li><i data-lucide="terminal"></i> Drop-in <code>/v1/chat/completions</code></li>
+            <li><i data-lucide="git-branch"></i> Native <code>/v1/responses</code></li>
+            <li><i data-lucide="shield-check"></i> Your key, your account</li>
+          </ul>
+        </section>
 
         <div class="grid">
           <form id="signup-form" class="panel form-panel">
             <div class="panel-heading">
+              <span class="panel-kicker">
+                <i data-lucide="plug-zap"></i>
+                Connect
+              </span>
               <h2>Connect Cursor</h2>
-              <p>Use a Cursor user API key from Dashboard > Integrations.</p>
+              <p>Use a Cursor user API key from Dashboard &gt; Integrations.</p>
             </div>
 
             <label>
-              <span>Name</span>
+              <span class="label-text">
+                <i data-lucide="user"></i>
+                Name
+              </span>
               <input id="name" name="name" autocomplete="name" placeholder="Ada Lovelace" />
             </label>
 
             <label>
-              <span>Email</span>
+              <span class="label-text">
+                <i data-lucide="mail"></i>
+                Email
+              </span>
               <input id="email" name="email" autocomplete="email" type="email" placeholder="ada@example.com" />
             </label>
 
             <label>
-              <span>Cursor API key</span>
+              <span class="label-text">
+                <i data-lucide="key-round"></i>
+                Cursor API key
+              </span>
               <input id="cursor-key" name="cursorKey" autocomplete="off" type="password" placeholder="key_..." required />
             </label>
 
@@ -52,16 +102,39 @@
               <span>Connect</span>
             </button>
 
-            <p id="status" class="status" role="status"></p>
+            <p id="status" class="status" role="status">
+              <i data-lucide="lock" class="status-icon"></i>
+              <span class="status-text">Keys are encrypted at rest. We never store them in plain text.</span>
+            </p>
           </form>
 
           <section id="dashboard" class="panel dashboard is-empty" aria-live="polite">
             <div class="empty-state">
-              <i data-lucide="key-round"></i>
-              <h2>Endpoints appear after connect.</h2>
+              <div class="empty-icon">
+                <i data-lucide="square-terminal"></i>
+              </div>
+              <h2>Your Composer API key lands here</h2>
+              <p>Generate Chat Completions and Responses endpoints for OpenAI-compatible clients.</p>
+              <div class="terminal-preview" aria-hidden="true">
+                <div class="terminal-bar">
+                  <span></span><span></span><span></span>
+                  <em>composer-2.5</em>
+                </div>
+                <div class="terminal-body">
+                  <div><span class="code-accent">$</span> curl /v1/chat/completions</div>
+                  <div><span class="code-muted">&gt;</span> model: <span class="code-str">composer-2.5</span></div>
+                  <div><span class="code-ok">200</span> response.created</div>
+                </div>
+              </div>
             </div>
           </section>
         </div>
+
+        <footer class="site-footer">
+          <span>Built by <a href="https://github.com/standardagents" target="_blank" rel="noreferrer">Standard Agents</a></span>
+          <span class="footer-dot" aria-hidden="true">&middot;</span>
+          <span>Composer is a trademark of Anysphere. Not affiliated.</span>
+        </footer>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>
