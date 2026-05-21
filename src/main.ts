@@ -186,7 +186,7 @@ function mountEarlyAccessBar(): void {
     <div class="sa-bar-inner">
       <div class="sa-bar-pitch">
         <img class="sa-bar-mark" src="/standard-agents-logo.svg" alt="Standard Agents" />
-        <p>Standard Agents is building reliable agent infrastructure. Get early access.</p>
+        <p>We're building better agent infrastructure. Get early access</p>
       </div>
       <form id="sa-bar-form" class="sa-bar-form" novalidate>
         <input id="sa-bar-name" name="name" type="text" placeholder="Name" autocomplete="name" required />
