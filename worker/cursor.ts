@@ -36,7 +36,7 @@ export function resolveCursorModel(model: unknown): { id: string } | undefined {
   if (normalized === "composer-2.5-fast" || normalized === "composer-2-5-fast") {
     return { id: "composer-2.5-fast" };
   }
-  if (normalized === "auto" || normalized === "default") return { id: "default" };
+  if (normalized === "auto" || normalized === "default") return { id: "composer-2.5" };
   return { id: model.trim() };
 }
 

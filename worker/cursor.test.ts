@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { streamCursorText } from "./cursor";
+import { resolveCursorModel, streamCursorText } from "./cursor";
 import { encodeSse } from "./sse";
 
 describe("Cursor stream adapter", () => {
+  it("maps public default aliases to a concrete internal Composer model", () => {
+    expect(resolveCursorModel("default")).toEqual({ id: "composer-2.5" });
+    expect(resolveCursorModel("auto")).toEqual({ id: "composer-2.5" });
+  });
+
   it("extracts final text from raw Cursor adapter Connect/protobuf frames", async () => {
     const response = new Response(
       new ReadableStream<Uint8Array>({

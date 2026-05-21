@@ -1,5 +1,6 @@
 import "./styles.css";
-import { escapeAttr, escapeHtml, hydrateIcons, icon, wireCopyButtons } from "./ui";
+import { hydrateIcons, icon, wireCopyButtons } from "./ui";
+import { renderMarkdown } from "./markdown";
 
 const origin = window.location.origin;
 const baseUrl = `${origin}/v1`;
@@ -17,13 +18,13 @@ async function route(): Promise<void> {
   if (isChatRoute()) {
     landing.hidden = true;
     chatRoot.hidden = false;
-    document.title = "Cursor Chat — The Unofficial Cursor API";
+    document.title = "Cursor Chat — The missing Composer 2.5 API";
     const { mountChat } = await import("./chat");
     mountChat(chatRoot);
   } else {
     chatRoot.hidden = true;
     landing.hidden = false;
-    document.title = "The Unofficial Cursor API";
+    document.title = "The missing Composer 2.5 API";
     mountLanding();
   }
 }
@@ -48,99 +49,39 @@ window.addEventListener("popstate", () => void route());
 /* ----------------------------------------------------------- landing page */
 
 let landingReady = false;
+let docsReady = false;
 
 function mountLanding(): void {
   hydrateIcons(document.getElementById("landing") ?? document);
   if (landingReady) return;
   landingReady = true;
 
-  renderEndpoints();
-  renderSnippet("snippet-openai", "openai-sdk.ts", openAiSnippet());
-  renderSnippet("snippet-vercel", "vercel-ai-sdk.ts", vercelSnippet());
+  void renderDocs();
   void loadStars();
 }
 
-function renderEndpoints(): void {
-  const list = document.getElementById("endpoint-list");
-  if (!list) return;
-  const rows: Array<[string, string]> = [
-    ["Base URL", baseUrl],
-    ["Chat Completions", `${baseUrl}/chat/completions`],
-    ["Responses", `${baseUrl}/responses`],
-    ["Models", `${baseUrl}/models`]
-  ];
-  list.innerHTML = rows
-    .map(
-      ([label, value]) => `
-      <div class="endpoint-row">
-        <span class="endpoint-label">${escapeHtml(label)}</span>
-        <code>${escapeHtml(value)}</code>
-        <button class="icon-button" data-copy="${escapeAttr(value)}" aria-label="Copy ${escapeAttr(label)}">
-          ${icon("Copy", { width: 16, height: 16 })}
-        </button>
-      </div>`
-    )
-    .join("");
-  wireCopyButtons(list);
-}
+async function renderDocs(): Promise<void> {
+  if (docsReady) return;
+  const content = document.getElementById("docs-content");
+  const nav = document.getElementById("docs-nav");
+  if (!content || !nav) return;
+  docsReady = true;
 
-function renderSnippet(targetId: string, filename: string, code: string): void {
-  const target = document.getElementById(targetId);
-  if (!target) return;
-  target.innerHTML = `
-    <figure class="snippet">
-      <figcaption class="snippet-bar">
-        <span class="snippet-name">${icon("Code2", { width: 14, height: 14 })}${escapeHtml(filename)}</span>
-        <button class="snippet-copy icon-button" data-copy="${escapeAttr(code)}" aria-label="Copy ${escapeAttr(filename)}">
-          ${icon("Copy", { width: 16, height: 16 })}
-        </button>
-      </figcaption>
-      <pre><code>${escapeHtml(code)}</code></pre>
-    </figure>`;
-  wireCopyButtons(target);
-}
-
-function openAiSnippet(): string {
-  return `import OpenAI from "openai";
-
-const client = new OpenAI({
-  apiKey: process.env.CURSOR_API_KEY,
-  baseURL: "${baseUrl}"
-});
-
-// Chat Completions — supported, drop-in compatible
-const chat = await client.chat.completions.create({
-  model: "composer-2.5",
-  messages: [{ role: "user", content: "Explain async iterators." }]
-});
-console.log(chat.choices[0].message.content);
-
-// Responses API — recommended for new projects
-const response = await client.responses.create({
-  model: "composer-2.5",
-  input: "Explain async iterators."
-});
-console.log(response.output_text);`;
-}
-
-function vercelSnippet(): string {
-  return `import { createOpenAI } from "@ai-sdk/openai";
-import { streamText } from "ai";
-
-const openai = createOpenAI({
-  apiKey: process.env.CURSOR_API_KEY,
-  baseURL: "${baseUrl}"
-});
-
-const result = streamText({
-  // openai.responses(id) or openai.chat(id)
-  model: openai.responses("composer-2.5"),
-  prompt: "Explain async iterators."
-});
-
-for await (const delta of result.textStream) {
-  process.stdout.write(delta);
-}`;
+  try {
+    const response = await fetch("/setup.md");
+    if (!response.ok) throw new Error(`setup.md returned ${response.status}`);
+    const markdown = (await response.text()).replaceAll("{{BASE_URL}}", baseUrl);
+    const rendered = renderMarkdown(markdown, { copyButtons: true });
+    content.innerHTML = rendered.html;
+    nav.innerHTML = rendered.headings
+      .filter((heading) => heading.level === 2)
+      .map((heading) => `<a href="#${heading.id}">${heading.text}</a>`)
+      .join("");
+    wireCopyButtons(content);
+  } catch {
+    content.innerHTML = "<p>Setup docs could not be loaded. Open the Markdown version directly.</p>";
+    nav.innerHTML = "";
+  }
 }
 
 /* ----------------------------------------------------- GitHub star count */

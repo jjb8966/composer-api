@@ -6,27 +6,27 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="theme-color" content="#1c1d18" />
 
-    <title>The Unofficial Cursor API</title>
+    <title>The missing Composer 2.5 API</title>
     <meta
       name="description"
-      content="use standard SDKs with your Cursor Subscription — drop-in OpenAI-compatible /v1/chat/completions and /v1/responses."
+      content="Chat completions and responses api for composer 2.5."
     />
 
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="The Unofficial Cursor API" />
+    <meta property="og:title" content="The missing Composer 2.5 API" />
     <meta
       property="og:description"
-      content="use standard SDKs with your Cursor Subscription — drop-in OpenAI-compatible /v1/chat/completions and /v1/responses."
+      content="Chat completions and responses api for composer 2.5."
     />
     <meta property="og:image" content="/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
 
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="The Unofficial Cursor API" />
+    <meta name="twitter:title" content="The missing Composer 2.5 API" />
     <meta
       name="twitter:description"
-      content="use standard SDKs with your Cursor Subscription — drop-in OpenAI-compatible /v1/chat/completions and /v1/responses."
+      content="Chat completions and responses api for composer 2.5."
     />
     <meta name="twitter:image" content="/og-image.png" />
   </head>
@@ -68,17 +68,12 @@
 
         <section class="hero" aria-labelledby="hero-title">
           <img class="hero-mark" src="/cursor-logo.svg" alt="Cursor" width="48" height="48" />
-          <h1 id="hero-title">The Unofficial<br />Cursor API</h1>
-          <p class="hero-lede">
-            Cursor is a great editor &mdash; but it ships without the standard API endpoints you
-            expect from a model provider. This fills that gap: drop-in
-            <code>/v1/chat/completions</code> and <code>/v1/responses</code>, authenticated with
-            your own Cursor key.
+          <p class="hero-badge">
+            <i data-lucide="plug-zap"></i>
+            OpenAI-SDK compatible
           </p>
-          <p class="hero-note">
-            <i data-lucide="zap"></i>
-            Free to use for now &mdash; while it isn&rsquo;t costing us much to run.
-          </p>
+          <h1 id="hero-title">The missing Composer 2.5 API</h1>
+          <p class="hero-lede">Chat completions and responses api for composer 2.5</p>
 
           <div class="hero-actions">
             <a class="btn btn-primary" href="/chat">
@@ -94,63 +89,21 @@
 
         <section id="docs" class="docs" aria-labelledby="docs-title">
           <header class="docs-head">
-            <span class="kicker"><i data-lucide="terminal"></i> Setup</span>
-            <h2 id="docs-title">use standard SDKs with your Cursor Subscription</h2>
-            <p>Four steps from a Cursor key to streaming completions.</p>
+            <div>
+              <span class="kicker"><i data-lucide="terminal"></i> Setup</span>
+              <h2 id="docs-title">use standard SDKs with your Cursor Subscription</h2>
+              <p>Plain documentation generated from Markdown.</p>
+            </div>
+            <a class="docs-markdown-link" href="/setup.md" target="_blank" rel="noreferrer">
+              <i data-lucide="code-2"></i>
+              View as markdown
+            </a>
           </header>
 
-          <ol class="docs-steps">
-            <li class="doc-step" id="step-key">
-              <div class="doc-step-head">
-                <span class="doc-step-num">1</span>
-                <h3>Get a Cursor API key</h3>
-              </div>
-              <p>
-                Sign in at
-                <a href="https://cursor.com/dashboard" target="_blank" rel="noreferrer">cursor.com/dashboard</a>,
-                open <strong>Integrations &rarr; API Keys</strong>, and create a key. It looks like
-                <code>key_&hellip;</code>. Treat it like a password &mdash; this site forwards it
-                straight to Cursor and never stores it.
-              </p>
-            </li>
-
-            <li class="doc-step" id="step-endpoints">
-              <div class="doc-step-head">
-                <span class="doc-step-num">2</span>
-                <h3>Use the base URL and Bearer token</h3>
-              </div>
-              <p>
-                Send <code>Authorization: Bearer &lt;your-cursor-api-key&gt;</code> to either
-                endpoint below.
-              </p>
-              <div id="endpoint-list" class="endpoint-list"></div>
-            </li>
-
-            <li class="doc-step" id="step-openai">
-              <div class="doc-step-head">
-                <span class="doc-step-num">3</span>
-                <h3>OpenAI SDK</h3>
-              </div>
-              <p>
-                Set <code>baseURL</code> and <code>apiKey</code>. Chat Completions still works
-                everywhere; the Responses API is what OpenAI now recommends for new projects.
-              </p>
-              <div id="snippet-openai"></div>
-            </li>
-
-            <li class="doc-step" id="step-vercel">
-              <div class="doc-step-head">
-                <span class="doc-step-num">4</span>
-                <h3>Vercel AI SDK</h3>
-              </div>
-              <p>
-                Create a provider with <code>createOpenAI</code>, then pick
-                <code>openai.responses(&hellip;)</code> or <code>openai.chat(&hellip;)</code> and
-                pass it to <code>streamText</code>.
-              </p>
-              <div id="snippet-vercel"></div>
-            </li>
-          </ol>
+          <div class="docs-layout">
+            <nav id="docs-nav" class="docs-nav" aria-label="Documentation sections"></nav>
+            <article id="docs-content" class="markdown-doc" aria-live="polite"></article>
+          </div>
         </section>
 
         <footer class="site-footer">

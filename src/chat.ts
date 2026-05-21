@@ -1,5 +1,6 @@
 import { escapeHtml, highlightJson, icon } from "./ui";
 import { assistantDisplayContent, sanitizeAssistantContent } from "./chat-sanitize";
+import { renderMarkdown } from "./markdown";
 
 /* ============================================================ types */
 
@@ -35,6 +36,8 @@ const MODELS = [
 
 const STATE_KEY = "cursor-chat.state.v1";
 const REMEMBERED_KEY = "cursor-chat.apiKey";
+const LOCAL_DEV_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const LOCAL_DEV_API_ORIGIN = "https://composer-api.formkit.workers.dev";
 
 /* ============================================================ state */
 
@@ -215,7 +218,7 @@ function template(): string {
           <label class="modal-field">
             <span>Cursor API key</span>
             <input id="key-input" type="password" autocomplete="off" spellcheck="false"
-              placeholder="key_..." />
+              placeholder="crsr_..." />
           </label>
           <label class="modal-check">
             <input id="key-remember" type="checkbox" />
@@ -467,8 +470,18 @@ function messageNode(role: Role, content: string): HTMLElement {
     <span class="chat-msg-avatar">${icon(role === "user" ? "User" : "Sparkles", { width: 15, height: 15 })}</span>
     <div class="chat-msg-bubble"></div>`;
   const bubble = node.querySelector<HTMLElement>(".chat-msg-bubble")!;
-  bubble.textContent = role === "assistant" ? assistantDisplayContent(content) : content;
+  if (role === "assistant") {
+    bubble.innerHTML = renderAssistantContent(content);
+  } else {
+    bubble.textContent = content;
+  }
   return node;
+}
+
+function renderAssistantContent(content: string): string {
+  const cleaned = assistantDisplayContent(content);
+  if (!cleaned) return "";
+  return renderMarkdown(cleaned, { headingIds: false }).html;
 }
 
 /* ============================================================ request preview */
@@ -493,7 +506,8 @@ function buildRequestBody(draft?: string): Record<string, unknown> {
 }
 
 function endpointFor(mode: ApiMode): string {
-  return mode === "responses" ? "/v1/responses" : "/v1/chat/completions";
+  const origin = LOCAL_DEV_HOSTS.has(window.location.hostname) ? LOCAL_DEV_API_ORIGIN : "";
+  return mode === "responses" ? `${origin}/v1/responses` : `${origin}/v1/chat/completions`;
 }
 
 function renderInspector(): void {
@@ -602,7 +616,7 @@ async function send(): Promise<void> {
     const stream = mode === "responses" ? readResponseDeltas(response.body) : readChatDeltas(response.body);
     for await (const delta of stream) {
       received += delta;
-      bubble.textContent = assistantDisplayContent(received);
+      bubble.innerHTML = renderAssistantContent(received);
       refs.transcript.scrollTop = refs.transcript.scrollHeight;
     }
 
