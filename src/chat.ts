@@ -219,14 +219,13 @@ function template(): string {
           </label>
           <label class="modal-check">
             <input id="key-remember" type="checkbox" />
-            <span>Remember in this browser (stored unencrypted in localStorage)</span>
+            <span>Remember in this browser</span>
           </label>
           <p class="modal-error" id="key-error" hidden></p>
           <div class="modal-actions">
             <button class="btn btn-primary" type="submit">Start chatting</button>
           </div>
         </form>
-        <p class="modal-foot">By default the key is kept in memory for this tab only.</p>
       </div>
     </div>
   </div>`;
