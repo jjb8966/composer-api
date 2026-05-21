@@ -1,6 +1,6 @@
 import { HttpError } from "./http";
 import { parseSse } from "./sse";
-import type { CursorCompletion, CursorMe, CursorPrompt, Deps, Env } from "./types";
+import type { CursorCompletion, CursorImage, CursorMe, CursorPrompt, Deps, Env } from "./types";
 
 interface CursorModelResponse {
   items?: Array<{ id: string; displayName?: string; aliases?: string[] }>;
@@ -18,6 +18,13 @@ interface ProtobufField {
 
 const cursorIdentityCache = new Map<string, { identity: string; expiresAt: number }>();
 const COMPOSER_CONTROL_TOKEN_PATTERN = /<\/think>|<\s*[|｜]\s*final\s*[|｜]\s*>/g;
+const MAX_CURSOR_IMAGE_BYTES = 1024 * 1024;
+
+interface EncodedCursorImage {
+  data: Uint8Array;
+  dimension?: { width: number; height: number };
+  uuid: string;
+}
 
 export async function verifyCursorApiKey(env: Env, deps: Deps, apiKey: string): Promise<CursorMe> {
   return cursorPublicJson<CursorMe>(env, deps, apiKey, "/v1/me");
@@ -46,9 +53,7 @@ export async function createCursorCompletion(
   apiKey: string,
   input: { prompt: CursorPrompt; model?: { id: string } }
 ): Promise<CursorCompletion> {
-  if (input.prompt.images?.length) {
-    throw new HttpError("Image input is not supported by the Cursor Cursor adapter adapter yet.", 400, "unsupported_parameter", "image");
-  }
+  const images = await resolveCursorImages(input.prompt.images ?? [], deps);
   const cursorIdentity = await getCursorAccountIdentity(env, deps, apiKey);
   const accessToken = await exchangeCursorApiKey(env, deps, apiKey);
   const requestId = deps.randomUUID();
@@ -56,6 +61,7 @@ export async function createCursorCompletion(
   const requestBody = encodeConnectFrame(
     encodeCursorChatChatRequest({
       prompt: input.prompt,
+      images,
       model: input.model?.id || "composer-2.5",
       requestId,
       conversationId,
@@ -69,6 +75,10 @@ export async function createCursorCompletion(
   });
   return { requestId, conversationId, stream: response };
 }
+
+export const cursorTestExports = {
+  encodeCursorChatChatRequest
+};
 
 export interface CursorTextEvent {
   type: "text" | "done";
@@ -319,15 +329,18 @@ async function cursorInternalHeaders(env: Env, accessToken: string, cursorIdenti
 
 function encodeCursorChatChatRequest(input: {
   prompt: CursorPrompt;
+  images?: EncodedCursorImage[];
   model: string;
   requestId: string;
   conversationId: string;
   messageId: string;
 }): Uint8Array {
   const messageId = input.messageId;
+  const imageFields = (input.images ?? []).map((image) => protoField(10, 2, encodeImageProto(image)));
   const userMessage = protoMessage([
     protoField(1, 2, input.prompt.text),
     protoField(2, 0, 1),
+    ...imageFields,
     protoField(13, 2, messageId),
     protoField(47, 0, 1)
   ]);
@@ -372,6 +385,80 @@ function encodeCursorChatChatRequest(input: {
     protoField(54, 2, "Ask")
   ]);
   return protoMessage([protoField(1, 2, request)]);
+}
+
+async function resolveCursorImages(images: CursorImage[], deps: Deps): Promise<EncodedCursorImage[]> {
+  const encoded: EncodedCursorImage[] = [];
+  for (const [index, image] of images.entries()) {
+    const data = "data" in image ? decodeBase64(image.data) : await fetchImageBytes(image.url, deps);
+    if (!data.length) throw new HttpError("Image input is empty.", 400, "invalid_request_error", "image");
+    if (data.length > MAX_CURSOR_IMAGE_BYTES) {
+      throw new HttpError(
+        "Image input is too large. Resize images to 1024px or less and keep each image under 1MB.",
+        400,
+        "invalid_request_error",
+        "image"
+      );
+    }
+    encoded.push({
+      data,
+      uuid: image.uuid || stableImageId(index),
+      ...("dimension" in image && image.dimension ? { dimension: image.dimension } : {})
+    });
+  }
+  return encoded;
+}
+
+async function fetchImageBytes(url: string, deps: Deps): Promise<Uint8Array> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new HttpError("Image URL is invalid.", 400, "invalid_request_error", "image_url");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new HttpError("Image URL must use http or https.", 400, "invalid_request_error", "image_url");
+  }
+  const response = await deps.fetch(parsed.toString(), { method: "GET" });
+  if (!response.ok) {
+    throw new HttpError(`Could not fetch image URL (${response.status}).`, 400, "invalid_request_error", "image_url");
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType && !contentType.toLowerCase().startsWith("image/")) {
+    throw new HttpError("Image URL did not return an image content type.", 400, "invalid_request_error", "image_url");
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function encodeImageProto(image: EncodedCursorImage): Uint8Array {
+  const fields = [protoField(1, 2, image.data)];
+  if (image.dimension) {
+    fields.push(
+      protoField(
+        2,
+        2,
+        protoMessage([protoField(1, 0, image.dimension.width), protoField(2, 0, image.dimension.height)])
+      )
+    );
+  }
+  fields.push(protoField(3, 2, image.uuid));
+  return protoMessage(fields);
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const normalized = value.replace(/\s/g, "");
+  try {
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch {
+    throw new HttpError("Image data URL contains invalid base64 data.", 400, "invalid_request_error", "image_url");
+  }
+}
+
+function stableImageId(index: number): string {
+  return typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `image-${Date.now()}-${index}`;
 }
 
 function encodeConnectFrame(payload: Uint8Array): Uint8Array {

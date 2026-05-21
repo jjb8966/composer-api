@@ -405,10 +405,13 @@ function contentToTextAndImages(content: unknown, role: string): { text: string;
     if ((type === "text" || type === "input_text" || type === "output_text") && typeof part.text === "string") {
       parts.push(part.text);
     } else if (type === "image_url" && isRecord(part.image_url) && typeof part.image_url.url === "string") {
-      images.push(imageFromUrl(part.image_url.url));
+      images.push(imageFromUrl(part.image_url.url, part.image_url));
       parts.push("[image]");
     } else if (type === "input_image" && typeof part.image_url === "string") {
       images.push(imageFromUrl(part.image_url));
+      parts.push("[image]");
+    } else if (type === "input_image" && isRecord(part.image_url) && typeof part.image_url.url === "string") {
+      images.push(imageFromUrl(part.image_url.url, part.image_url));
       parts.push("[image]");
     } else if (type === "tool_result" || type === "function_call_output") {
       parts.push(`${role} ${String(type)}: ${JSON.stringify(part)}`);
@@ -419,12 +422,19 @@ function contentToTextAndImages(content: unknown, role: string): { text: string;
   return { text: parts.join("\n"), images };
 }
 
-function imageFromUrl(url: string): CursorImage {
+function imageFromUrl(url: string, metadata?: Record<string, unknown>): CursorImage {
+  const dimension =
+    typeof metadata?.width === "number" &&
+    typeof metadata.height === "number" &&
+    Number.isFinite(metadata.width) &&
+    Number.isFinite(metadata.height)
+      ? { width: Math.round(metadata.width), height: Math.round(metadata.height) }
+      : undefined;
   const dataUrl = /^data:([^;,]+);base64,(.+)$/i.exec(url);
   if (dataUrl) {
-    return { mimeType: dataUrl[1], data: dataUrl[2] };
+    return { mimeType: dataUrl[1], data: dataUrl[2], ...(dimension ? { dimension } : {}) };
   }
-  return { url };
+  return { url, ...(dimension ? { dimension } : {}) };
 }
 
 function usageFromChars(promptChars: number, completionChars: number) {

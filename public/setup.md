@@ -6,25 +6,26 @@ Use the OpenAI SDK, Vercel AI SDK, or any client that can set a custom base URL.
 
 Sign in at [cursor.com/dashboard](https://cursor.com/dashboard), open **Integrations -> API Keys**, and create a key. It should look like `crsr_...`.
 
-## Configure your client
+## Vercel AI SDK
 
-Set your base URL to:
+```ts
+import { createOpenAI } from "@ai-sdk/openai";
+import { streamText } from "ai";
 
-```txt
-{{BASE_URL}}
+const openai = createOpenAI({
+  apiKey: process.env.CURSOR_API_KEY,
+  baseURL: "{{BASE_URL}}"
+});
+
+const result = streamText({
+  model: openai.responses("composer-2.5"),
+  prompt: "Explain async iterators."
+});
+
+for await (const delta of result.textStream) {
+  process.stdout.write(delta);
+}
 ```
-
-Send your Cursor key as the Authorization header:
-
-```http
-Authorization: Bearer <your-cursor-api-key>
-```
-
-Available endpoints:
-
-- `POST {{BASE_URL}}/chat/completions`
-- `POST {{BASE_URL}}/responses`
-- `GET {{BASE_URL}}/models`
 
 ## OpenAI SDK
 
@@ -51,27 +52,6 @@ const response = await client.responses.create({
 console.log(response.output_text);
 ```
 
-## Vercel AI SDK
-
-```ts
-import { createOpenAI } from "@ai-sdk/openai";
-import { streamText } from "ai";
-
-const openai = createOpenAI({
-  apiKey: process.env.CURSOR_API_KEY,
-  baseURL: "{{BASE_URL}}"
-});
-
-const result = streamText({
-  model: openai.responses("composer-2.5"),
-  prompt: "Explain async iterators."
-});
-
-for await (const delta of result.textStream) {
-  process.stdout.write(delta);
-}
-```
-
 ## cURL
 
 ```bash
@@ -84,3 +64,23 @@ curl {{BASE_URL}}/chat/completions \
     "stream": true
   }'
 ```
+
+## Custom client
+
+Set your base URL to:
+
+```txt
+{{BASE_URL}}
+```
+
+Send your Cursor key as the Authorization header:
+
+```http
+Authorization: Bearer <your-cursor-api-key>
+```
+
+Available endpoints:
+
+- `POST {{BASE_URL}}/chat/completions`
+- `POST {{BASE_URL}}/responses`
+- `GET {{BASE_URL}}/models`

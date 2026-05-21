@@ -13,7 +13,7 @@ describe("OpenAI compatibility adapter", () => {
             role: "user",
             content: [
               { type: "text", text: "What is this?" },
-              { type: "image_url", image_url: { url: "https://example.com/image.png" } }
+              { type: "image_url", image_url: { url: "https://example.com/image.png", width: 640, height: 480 } }
             ]
           }
         ],
@@ -24,7 +24,37 @@ describe("OpenAI compatibility adapter", () => {
     expect(prepared.prompt.text).toContain("SYSTEM: Be terse.");
     expect(prepared.prompt.text).toContain("USER: What is this?");
     expect(prepared.prompt.text).toContain("within about 50 output tokens");
-    expect(prepared.prompt.images).toEqual([{ url: "https://example.com/image.png" }]);
+    expect(prepared.prompt.images).toEqual([{ url: "https://example.com/image.png", dimension: { width: 640, height: 480 } }]);
+  });
+
+  it("converts Responses input images into Cursor prompts", () => {
+    const prepared = prepareResponsesRequest(
+      {
+        model: "composer-2.5",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "What is in this image?" },
+              {
+                type: "input_image",
+                image_url: {
+                  url: "data:image/jpeg;base64,AQID",
+                  width: 320,
+                  height: 240
+                }
+              }
+            ]
+          }
+        ]
+      },
+      { id: "composer-2.5" }
+    );
+
+    expect(prepared.prompt.text).toContain("USER: What is in this image?");
+    expect(prepared.prompt.images).toEqual([
+      { mimeType: "image/jpeg", data: "AQID", dimension: { width: 320, height: 240 } }
+    ]);
   });
 
   it("rejects unsupported OpenAI function tools", () => {

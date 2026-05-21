@@ -1,4 +1,4 @@
-import { escapeHtml, highlightJson, icon } from "./ui";
+import { escapeAttr, escapeHtml, highlightJson, icon } from "./ui";
 import { assistantDisplayContent, sanitizeAssistantContent } from "./chat-sanitize";
 import { renderMarkdown } from "./markdown";
 
@@ -10,6 +10,17 @@ type ApiMode = "chat" | "responses";
 interface ChatMessage {
   role: Role;
   content: string;
+  images?: ChatImage[];
+}
+
+interface ChatImage {
+  id: string;
+  name: string;
+  dataUrl: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  size: number;
 }
 
 interface Session {
@@ -38,6 +49,10 @@ const STATE_KEY = "cursor-chat.state.v1";
 const REMEMBERED_KEY = "cursor-chat.apiKey";
 const LOCAL_DEV_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const LOCAL_DEV_API_ORIGIN = "https://composer-api.formkit.workers.dev";
+const MAX_ATTACHMENTS = 4;
+const IMAGE_MAX_DIMENSION = 1024;
+const IMAGE_TARGET_BYTES = 900 * 1024;
+const IMAGE_OUTPUT_TYPE = "image/jpeg";
 
 /* ============================================================ state */
 
@@ -90,6 +105,7 @@ function activeSession(): Session | null {
 /* ============================================================ mount */
 
 let busy = false;
+let pendingImages: ChatImage[] = [];
 
 export function mountChat(root: HTMLElement): void {
   cleanStoredSessions();
@@ -181,16 +197,23 @@ function template(): string {
             </button>
           </div>
           <form class="chat-composer" id="chat-form">
-            <textarea
-              id="composer"
-              rows="1"
-              placeholder="Message Cursor Chat..."
-              aria-label="Message"
-            ></textarea>
-            <button class="send-btn" id="send" type="submit" aria-label="Send message">
-              ${icon("SendHorizontal", { width: 18, height: 18, class: "send-icon" })}
-              ${icon("Loader2", { width: 18, height: 18, class: "send-spinner spin" })}
-            </button>
+            <div class="attachment-tray" id="attachment-tray" hidden></div>
+            <div class="composer-row">
+              <button class="attach-btn" id="attach-image" type="button" aria-label="Attach images">
+                ${icon("ImagePlus", { width: 18, height: 18 })}
+              </button>
+              <input id="image-input" type="file" accept="image/*" multiple hidden />
+              <textarea
+                id="composer"
+                rows="1"
+                placeholder="Message Cursor Chat..."
+                aria-label="Message"
+              ></textarea>
+              <button class="send-btn" id="send" type="submit" aria-label="Send message">
+                ${icon("SendHorizontal", { width: 18, height: 18, class: "send-icon" })}
+                ${icon("Loader2", { width: 18, height: 18, class: "send-spinner spin" })}
+              </button>
+            </div>
           </form>
         </section>
 
@@ -244,6 +267,9 @@ interface Refs {
   composer: HTMLTextAreaElement;
   form: HTMLFormElement;
   send: HTMLButtonElement;
+  attachImage: HTMLButtonElement;
+  imageInput: HTMLInputElement;
+  attachmentTray: HTMLElement;
   modelSelect: HTMLSelectElement;
   modeSwitch: HTMLElement;
   inspector: HTMLElement;
@@ -272,6 +298,9 @@ function cacheRefs(root: HTMLElement): void {
   refs.composer = get<HTMLTextAreaElement>("composer");
   refs.form = get<HTMLFormElement>("chat-form");
   refs.send = get<HTMLButtonElement>("send");
+  refs.attachImage = get<HTMLButtonElement>("attach-image");
+  refs.imageInput = get<HTMLInputElement>("image-input");
+  refs.attachmentTray = get("attachment-tray");
   refs.modelSelect = get<HTMLSelectElement>("model-select");
   refs.modeSwitch = get("mode-switch");
   refs.inspector = get("inspector");
@@ -301,19 +330,47 @@ function bindEvents(): void {
     autoGrow();
     renderInspector();
   });
+  refs.composer.addEventListener("paste", (event) => {
+    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
+    if (!files.length) return;
+    event.preventDefault();
+    void addImageFiles(files);
+  });
   refs.composer.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       refs.form.requestSubmit();
     }
   });
+  refs.form.addEventListener("dragover", (event) => {
+    if ([...(event.dataTransfer?.items ?? [])].some((item) => item.type.startsWith("image/"))) {
+      event.preventDefault();
+      refs.form.classList.add("is-dragging");
+    }
+  });
+  refs.form.addEventListener("dragleave", () => refs.form.classList.remove("is-dragging"));
+  refs.form.addEventListener("drop", (event) => {
+    const files = [...(event.dataTransfer?.files ?? [])].filter((file) => file.type.startsWith("image/"));
+    if (!files.length) return;
+    event.preventDefault();
+    refs.form.classList.remove("is-dragging");
+    void addImageFiles(files);
+  });
+
+  refs.attachImage.addEventListener("click", () => refs.imageInput.click());
+  refs.imageInput.addEventListener("change", () => {
+    void addImageFiles([...(refs.imageInput.files ?? [])]);
+    refs.imageInput.value = "";
+  });
 
   document.getElementById("new-chat")?.addEventListener("click", () => {
     state.activeId = null;
+    pendingImages = [];
     saveState();
     renderSessions();
     renderTranscript();
     renderInspector();
+    renderPendingImages();
     refs.composer.focus();
   });
 
@@ -457,13 +514,13 @@ function renderTranscript(streaming?: HTMLElement): void {
   }
   refs.transcript.innerHTML = "";
   for (const message of messages) {
-    refs.transcript.appendChild(messageNode(message.role, message.content));
+    refs.transcript.appendChild(messageNode(message.role, message.content, message.images));
   }
   if (streaming) refs.transcript.appendChild(streaming);
   refs.transcript.scrollTop = refs.transcript.scrollHeight;
 }
 
-function messageNode(role: Role, content: string): HTMLElement {
+function messageNode(role: Role, content: string, images: ChatImage[] = []): HTMLElement {
   const node = document.createElement("article");
   node.className = `chat-msg chat-msg-${role}`;
   node.innerHTML = `
@@ -473,9 +530,26 @@ function messageNode(role: Role, content: string): HTMLElement {
   if (role === "assistant") {
     bubble.innerHTML = renderAssistantContent(content);
   } else {
-    bubble.textContent = content;
+    bubble.innerHTML = renderUserContent(content, images);
   }
   return node;
+}
+
+function renderUserContent(content: string, images: ChatImage[]): string {
+  const imageHtml = images.length
+    ? `<div class="chat-image-grid">${images.map((image) => userImageHtml(image)).join("")}</div>`
+    : "";
+  const textHtml = content ? `<p>${escapeHtml(content)}</p>` : "";
+  return `${imageHtml}${textHtml}`;
+}
+
+function userImageHtml(image: ChatImage): string {
+  const src = image.dataUrl.startsWith("data:image/") ? image.dataUrl : "";
+  return `
+    <figure class="chat-image">
+      <img src="${escapeAttr(src)}" alt="${escapeAttr(image.name || "Attached image")}" />
+      <figcaption>${escapeHtml(image.name || "Image")} · ${image.width}×${image.height}</figcaption>
+    </figure>`;
 }
 
 function renderAssistantContent(content: string): string {
@@ -486,23 +560,61 @@ function renderAssistantContent(content: string): string {
 
 /* ============================================================ request preview */
 
-function buildRequestBody(draft?: string): Record<string, unknown> {
+function buildRequestBody(draft?: string, images: ChatImage[] = []): Record<string, unknown> {
   const session = activeSession();
   const history = sanitizeHistory(session?.messages ?? []);
-  if (draft) history.push({ role: "user", content: draft });
+  if (draft || images.length) history.push({ role: "user", content: draft || "", ...(images.length ? { images } : {}) });
 
   if (state.mode === "responses") {
     return {
       model: state.model,
-      input: history.map((message) => ({ role: message.role, content: message.content })),
+      input: history.map(responseMessageForApi),
       stream: true
     };
   }
   return {
     model: state.model,
-    messages: history,
+    messages: history.map(chatMessageForApi),
     stream: true
   };
+}
+
+function chatMessageForApi(message: ChatMessage): Record<string, unknown> {
+  const images = message.images ?? [];
+  if (!images.length) return { role: message.role, content: message.content };
+  const content: Array<Record<string, unknown>> = [];
+  if (message.content) content.push({ type: "text", text: message.content });
+  for (const image of images) {
+    content.push({
+      type: "image_url",
+      image_url: {
+        url: image.dataUrl,
+        detail: "auto",
+        width: image.width,
+        height: image.height
+      }
+    });
+  }
+  return { role: message.role, content };
+}
+
+function responseMessageForApi(message: ChatMessage): Record<string, unknown> {
+  const images = message.images ?? [];
+  if (!images.length) return { role: message.role, content: message.content };
+  const content: Array<Record<string, unknown>> = [];
+  if (message.content) content.push({ type: "input_text", text: message.content });
+  for (const image of images) {
+    content.push({
+      type: "input_image",
+      image_url: {
+        url: image.dataUrl,
+        detail: "auto",
+        width: image.width,
+        height: image.height
+      }
+    });
+  }
+  return { role: message.role, content };
 }
 
 function endpointFor(mode: ApiMode): string {
@@ -512,13 +624,25 @@ function endpointFor(mode: ApiMode): string {
 
 function renderInspector(): void {
   const draft = refs.composer.value.trim();
-  const body = buildRequestBody(draft || undefined);
-  refs.requestJson.innerHTML = highlightJson(JSON.stringify(body, null, 2));
+  const body = buildRequestBody(draft || undefined, pendingImages);
+  refs.requestJson.innerHTML = highlightJson(JSON.stringify(redactPreviewImages(body), null, 2));
   refs.inspectorRoute.textContent = `POST ${endpointFor(state.mode)}`;
   refs.inspectorNote.textContent =
     state.mode === "responses"
-      ? "Responses API — payload uses `input`; streamed as response.output_text.delta events."
-      : "Chat Completions — payload uses `messages`; streamed as chat.completion.chunk events.";
+      ? "Responses API — payload uses `input`; streamed as response.output_text.delta events. Images are resized before sending."
+      : "Chat Completions — payload uses `messages`; streamed as chat.completion.chunk events. Images are resized before sending.";
+}
+
+function redactPreviewImages(value: unknown): unknown {
+  if (typeof value === "string" && value.startsWith("data:image/")) {
+    const approxBytes = Math.round((value.length * 3) / 4);
+    return `${value.slice(0, value.indexOf(",") + 1)}<${formatBytes(approxBytes)} base64 image>`;
+  }
+  if (Array.isArray(value)) return value.map(redactPreviewImages);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactPreviewImages(item)]));
+  }
+  return value;
 }
 
 /* ============================================================ sending */
@@ -527,7 +651,8 @@ function sanitizeHistory(history: ChatMessage[]): ChatMessage[] {
   const cleaned: ChatMessage[] = [];
   for (const message of history) {
     if (message.role !== "assistant") {
-      cleaned.push(message);
+      const images = sanitizeImages(message.images);
+      cleaned.push({ role: message.role, content: message.content, ...(images.length ? { images } : {}) });
       continue;
     }
     const content = sanitizeAssistantContent(message.content);
@@ -536,13 +661,37 @@ function sanitizeHistory(history: ChatMessage[]): ChatMessage[] {
   return cleaned;
 }
 
+function sanitizeImages(images: unknown): ChatImage[] {
+  if (!Array.isArray(images)) return [];
+  return images
+    .filter((image): image is ChatImage => {
+      if (!image || typeof image !== "object") return false;
+      const item = image as Partial<ChatImage>;
+      return (
+        typeof item.id === "string" &&
+        typeof item.name === "string" &&
+        typeof item.dataUrl === "string" &&
+        item.dataUrl.startsWith("data:image/") &&
+        typeof item.mimeType === "string" &&
+        typeof item.width === "number" &&
+        typeof item.height === "number" &&
+        typeof item.size === "number"
+      );
+    })
+    .slice(0, MAX_ATTACHMENTS);
+}
+
 function cleanStoredSessions(): void {
   let changed = false;
   for (const session of state.sessions) {
     const cleaned = sanitizeHistory(session.messages);
     if (
       cleaned.length !== session.messages.length ||
-      cleaned.some((message, index) => message.content !== session.messages[index]?.content)
+      cleaned.some(
+        (message, index) =>
+          message.content !== session.messages[index]?.content ||
+          (message.images?.length ?? 0) !== (session.messages[index]?.images?.length ?? 0)
+      )
     ) {
       session.messages = cleaned;
       changed = true;
@@ -570,20 +719,23 @@ function ensureSession(firstPrompt: string): Session {
 async function send(): Promise<void> {
   if (busy) return;
   const prompt = refs.composer.value.trim();
-  if (!prompt) return;
+  const images = pendingImages;
+  if (!prompt && !images.length) return;
   if (!apiKey) {
     openKeyModal();
     return;
   }
 
   clearError();
-  const session = ensureSession(prompt);
-  session.messages.push({ role: "user", content: prompt });
+  const session = ensureSession(prompt || images[0]?.name || "Image");
+  session.messages.push({ role: "user", content: prompt, ...(images.length ? { images } : {}) });
   session.updatedAt = Date.now();
-  if (session.messages.length === 1) session.title = prompt.slice(0, 48).trim() || "New chat";
+  if (session.messages.length === 1) session.title = (prompt || images[0]?.name || "Image").slice(0, 48).trim() || "New chat";
   saveState();
 
   refs.composer.value = "";
+  pendingImages = [];
+  renderPendingImages();
   autoGrow();
   setBusy(true);
   renderSessions();
@@ -643,6 +795,8 @@ function setBusy(value: boolean): void {
   busy = value;
   refs.send.disabled = value;
   refs.composer.disabled = value;
+  refs.attachImage.disabled = value;
+  refs.imageInput.disabled = value;
   refs.app.classList.toggle("is-busy", value);
 }
 
@@ -659,6 +813,136 @@ function clearError(): void {
 function autoGrow(): void {
   refs.composer.style.height = "auto";
   refs.composer.style.height = `${Math.min(refs.composer.scrollHeight, 200)}px`;
+}
+
+/* ============================================================ image input */
+
+async function addImageFiles(files: File[]): Promise<void> {
+  clearError();
+  const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+  if (!imageFiles.length) return;
+  const slots = MAX_ATTACHMENTS - pendingImages.length;
+  if (slots <= 0) {
+    showError(`Attach up to ${MAX_ATTACHMENTS} images at a time.`);
+    return;
+  }
+  const selected = imageFiles.slice(0, slots);
+  try {
+    const resized = await Promise.all(selected.map(resizeImageFile));
+    pendingImages = [...pendingImages, ...resized];
+    renderPendingImages();
+    renderInspector();
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "Could not process that image.");
+  }
+  if (imageFiles.length > selected.length) {
+    showError(`Only ${MAX_ATTACHMENTS} images can be attached at once.`);
+  }
+}
+
+function renderPendingImages(): void {
+  refs.attachmentTray.hidden = pendingImages.length === 0;
+  refs.attachmentTray.innerHTML = pendingImages
+    .map(
+      (image) => `
+      <figure class="attachment-chip" data-id="${escapeAttr(image.id)}">
+        <img src="${escapeAttr(image.dataUrl)}" alt="${escapeAttr(image.name)}" />
+        <figcaption>${escapeHtml(image.name)} <span>${image.width}×${image.height}</span></figcaption>
+        <button type="button" aria-label="Remove ${escapeAttr(image.name)}" data-remove-image="${escapeAttr(image.id)}">
+          ${icon("X", { width: 13, height: 13 })}
+        </button>
+      </figure>`
+    )
+    .join("");
+  for (const button of refs.attachmentTray.querySelectorAll<HTMLButtonElement>("[data-remove-image]")) {
+    button.addEventListener("click", () => {
+      pendingImages = pendingImages.filter((image) => image.id !== button.dataset.removeImage);
+      renderPendingImages();
+      renderInspector();
+      refs.composer.focus();
+    });
+  }
+}
+
+async function resizeImageFile(file: File): Promise<ChatImage> {
+  const { image, dispose } = await loadImage(file);
+  try {
+    let scale = Math.min(1, IMAGE_MAX_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
+    let width = Math.max(1, Math.round(image.naturalWidth * scale));
+    let height = Math.max(1, Math.round(image.naturalHeight * scale));
+    let quality = 0.86;
+    let blob = await drawImageToBlob(image, width, height, quality);
+
+    while (blob.size > IMAGE_TARGET_BYTES && quality > 0.5) {
+      quality = Math.max(0.5, quality - 0.08);
+      blob = await drawImageToBlob(image, width, height, quality);
+    }
+    while (blob.size > IMAGE_TARGET_BYTES && Math.max(width, height) > 512) {
+      scale *= 0.85;
+      width = Math.max(1, Math.round(image.naturalWidth * scale));
+      height = Math.max(1, Math.round(image.naturalHeight * scale));
+      blob = await drawImageToBlob(image, width, height, quality);
+    }
+    if (blob.size > 1024 * 1024) {
+      throw new Error("That image is still over 1MB after resizing. Try a smaller image.");
+    }
+
+    return {
+      id: uid("img"),
+      name: file.name || "image.jpg",
+      dataUrl: await blobToDataUrl(blob),
+      mimeType: blob.type || IMAGE_OUTPUT_TYPE,
+      width,
+      height,
+      size: blob.size
+    };
+  } finally {
+    dispose();
+  }
+}
+
+async function loadImage(file: File): Promise<{ image: HTMLImageElement; dispose: () => void }> {
+  const url = URL.createObjectURL(file);
+  const image = new Image();
+  image.src = url;
+  const decode = (image as HTMLImageElement & { decode?: () => Promise<void> }).decode;
+  if (typeof decode === "function") await decode.call(image);
+  else {
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("Could not read that image."));
+    });
+  }
+  return { image, dispose: () => URL.revokeObjectURL(url) };
+}
+
+async function drawImageToBlob(image: HTMLImageElement, width: number, height: number, quality: number): Promise<Blob> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Could not process that image.");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Could not encode that image."))), IMAGE_OUTPUT_TYPE, quality);
+  });
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Could not read the resized image."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${bytes}B`;
 }
 
 /* ============================================================ SSE parsing */

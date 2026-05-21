@@ -1,11 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { resolveCursorModel, streamCursorText } from "./cursor";
+import { cursorTestExports, resolveCursorModel, streamCursorText } from "./cursor";
 import { encodeSse } from "./sse";
 
 describe("Cursor stream adapter", () => {
   it("maps public default aliases to a concrete internal Composer model", () => {
     expect(resolveCursorModel("default")).toEqual({ id: "composer-2.5" });
     expect(resolveCursorModel("auto")).toEqual({ id: "composer-2.5" });
+  });
+
+  it("encodes attached images into the user ConversationMessage", () => {
+    const body = cursorTestExports.encodeCursorChatChatRequest({
+      prompt: { text: "Describe this image." },
+      images: [
+        {
+          data: new Uint8Array([1, 2, 3]),
+          dimension: { width: 640, height: 480 },
+          uuid: "image-test"
+        }
+      ],
+      model: "composer-2.5",
+      requestId: "request-test",
+      conversationId: "conversation-test",
+      messageId: "message-test"
+    });
+
+    const outer = fields(body);
+    const request = fields(bytesField(outer, 1));
+    const userMessage = fields(bytesField(request, 1));
+    const image = fields(bytesField(userMessage, 10));
+    const dimension = fields(bytesField(image, 2));
+
+    expect(bytesField(userMessage, 1)).toEqual(new TextEncoder().encode("Describe this image."));
+    expect(bytesField(image, 1)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(numberField(dimension, 1)).toBe(640);
+    expect(numberField(dimension, 2)).toBe(480);
+    expect(bytesField(image, 3)).toEqual(new TextEncoder().encode("image-test"));
   });
 
   it("extracts final text from raw Cursor adapter Connect/protobuf frames", async () => {
@@ -195,4 +224,54 @@ function varint(value: number): Uint8Array {
   }
   bytes.push(current);
   return new Uint8Array(bytes);
+}
+
+type TestField = { no: number; wt: number; value: number | Uint8Array };
+
+function fields(data: Uint8Array): TestField[] {
+  const output: TestField[] = [];
+  let offset = 0;
+  while (offset < data.length) {
+    const tag = readVarint(data, offset);
+    offset = tag.offset;
+    const no = tag.value >> 3;
+    const wt = tag.value & 7;
+    if (wt === 0) {
+      const value = readVarint(data, offset);
+      offset = value.offset;
+      output.push({ no, wt, value: value.value });
+    } else if (wt === 2) {
+      const length = readVarint(data, offset);
+      offset = length.offset;
+      output.push({ no, wt, value: data.slice(offset, offset + length.value) });
+      offset += length.value;
+    } else {
+      throw new Error(`Unsupported wire type ${wt}`);
+    }
+  }
+  return output;
+}
+
+function bytesField(fieldList: TestField[], no: number): Uint8Array {
+  const field = fieldList.find((item) => item.no === no);
+  if (!field || !(field.value instanceof Uint8Array)) throw new Error(`Missing bytes field ${no}`);
+  return field.value;
+}
+
+function numberField(fieldList: TestField[], no: number): number {
+  const field = fieldList.find((item) => item.no === no);
+  if (!field || typeof field.value !== "number") throw new Error(`Missing number field ${no}`);
+  return field.value;
+}
+
+function readVarint(data: Uint8Array, offset: number): { value: number; offset: number } {
+  let value = 0;
+  let shift = 0;
+  while (offset < data.length) {
+    const byte = data[offset++];
+    value += (byte & 0x7f) * 2 ** shift;
+    if ((byte & 0x80) === 0) return { value, offset };
+    shift += 7;
+  }
+  throw new Error("Unexpected end of varint");
 }

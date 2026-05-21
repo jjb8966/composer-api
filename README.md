@@ -59,13 +59,12 @@ never forwarded to Cursor as a Cursor key.
 
 ## Compatibility notes
 
-This project supports text input, non-streaming and streaming output, JSON-output prompt constraints, and the common SDK response shapes.
+This project supports text and image input, non-streaming and streaming output, JSON-output prompt constraints, and the common SDK response shapes. Image inputs can be sent as Chat Completions `image_url` parts or Responses `input_image` parts; each resolved image must be 1MB or smaller.
 
 These OpenAI features are intentionally rejected because Cursor's Cursor adapter stream does not expose equivalent OpenAI controls:
 
 - `n` greater than `1`
 - `logprobs` and `top_logprobs`
-- image input
 - audio output
 - OpenAI function/tool calls
 - background Responses API jobs
@@ -118,7 +117,7 @@ wrangler secret put WAITLIST_API_TOKEN
 - Cursor SDK package: `@cursor/sdk@1.0.13`
 - Cursor SDK TypeScript docs: https://cursor.com/docs/api/sdk/typescript
 - Cursor Composer 2.5 changelog: https://cursor.com/changelog/composer-2-5
-- Reverse-engineered Cursor Cursor adapter client: https://github.com/private-reference
+- Reverse-engineered Cursor Cursor adapter client/protobuf reference: https://github.com/private-reference
 - OpenAI Chat Completions reference: https://developers.openai.com/api/docs/api-reference/chat
 - OpenAI Responses reference: https://developers.openai.com/api/docs/api-reference/responses
 - OpenAI migration guide: https://developers.openai.com/api/docs/guides/migrate-to-responses
