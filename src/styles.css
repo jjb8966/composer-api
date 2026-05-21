@@ -249,6 +249,25 @@ code {
   letter-spacing: 0;
 }
 
+#hero-title span {
+  display: block;
+}
+
+.hero-title-kicker {
+  background: linear-gradient(180deg, #fffdf4 0%, #f0eee1 42%, #b9b7a8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero-title-gradient {
+  background: linear-gradient(92deg, var(--green) 0%, #c8ef35 48%, var(--yellow) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 22px rgba(166, 226, 46, 0.14));
+}
+
 .hero-lede {
   margin-top: 22px;
   max-width: 600px;
