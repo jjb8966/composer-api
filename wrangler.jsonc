@@ -6,6 +6,20 @@
   "compatibility_date": "2026-05-20",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "routes": [
+    { "pattern": "cursor-api.standardagents.ai", "custom_domain": true }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "persist": true
+    }
+  },
   "assets": {
     "directory": "./dist/client",
     "binding": "ASSETS",

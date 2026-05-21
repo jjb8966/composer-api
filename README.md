@@ -2,7 +2,7 @@
 
 OpenAI-compatible `chat.completions` and `responses` endpoints backed by Cursor Composer through Cursor's internal Cursor adapter stream.
 
-Live deployment: https://composer-api.formkit.workers.dev
+Live deployment: https://cursor-api.standardagents.ai
 
 ## What this is
 
