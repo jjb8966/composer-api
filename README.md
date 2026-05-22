@@ -48,6 +48,26 @@ curl https://<deployment>/v1/chat/completions \
 
 A Cursor user API key comes from the Cursor Dashboard under Integrations.
 
+To keep the key available in every new terminal, add it to your shell profile:
+
+```bash
+# zsh, the default shell on modern macOS
+printf '\nexport CURSOR_API_KEY="crsr_..."\n' >> ~/.zshrc
+source ~/.zshrc
+
+# bash
+printf '\nexport CURSOR_API_KEY="crsr_..."\n' >> ~/.bashrc
+source ~/.bashrc
+```
+
+For fish:
+
+```fish
+set -Ux CURSOR_API_KEY "crsr_..."
+```
+
+Do not commit your Cursor API key. Use your shell profile, your deployment provider's secret manager, or a local `.env` file ignored by git.
+
 ## Legacy hosted-key flow (optional)
 
 The Worker also keeps a backward-compatible hosted-key flow: `POST /api/signup`

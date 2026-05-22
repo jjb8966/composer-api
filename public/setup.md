@@ -10,6 +10,44 @@ Sign in at [cursor.com/dashboard](https://cursor.com/dashboard), open **Integrat
 
 This does not work around Cursor usage, billing, or account limits. You need a Cursor account and subscription to use this API, and every request is authenticated with your own Cursor API key.
 
+## Set the key in your shell
+
+Most SDKs and CLI tools read the key from `CURSOR_API_KEY`. For a one-time terminal session, run:
+
+```bash
+export CURSOR_API_KEY="crsr_..."
+```
+
+To make it available in every new terminal, add the export to your shell profile.
+
+For zsh, the default shell on modern macOS:
+
+```bash
+printf '\nexport CURSOR_API_KEY="crsr_..."\n' >> ~/.zshrc
+source ~/.zshrc
+```
+
+For bash:
+
+```bash
+printf '\nexport CURSOR_API_KEY="crsr_..."\n' >> ~/.bashrc
+source ~/.bashrc
+```
+
+For fish:
+
+```fish
+set -Ux CURSOR_API_KEY "crsr_..."
+```
+
+Open a new terminal and check it is set:
+
+```bash
+echo "$CURSOR_API_KEY"
+```
+
+Do not put your Cursor API key in source control. Use your shell profile, your deployment provider's secret manager, or a local `.env` file that is ignored by git.
+
 ## Vercel AI SDK
 
 Use the Vercel AI SDK when you want streaming helpers, framework adapters, and the `streamText` primitives you already use in Next.js or other TypeScript apps. Configure its OpenAI-compatible provider with this proxy as the base URL, then choose a Cursor-backed model id.
