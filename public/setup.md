@@ -92,11 +92,31 @@ print(response.output_text)
 
 OpenCode works best through the local Responses bridge in this repo. The bridge talks to OpenCode as a stateful `/v1/responses` provider, then lets the Cursor SDK run a local agent against your project folder.
 
+The local bridge listens on:
+
+```txt
+http://127.0.0.1:8791/v1
+```
+
+It exposes these endpoints:
+
+- `POST /v1/responses`
+- `GET /v1/responses/{response_id}`
+- `GET /v1/models`
+- `GET /v1/health`
+
 Start the bridge from this repo, pointing it at the project you want OpenCode to edit:
 
 ```bash
 export CURSOR_API_KEY="crsr_..."
 CURSOR_SDK_PROXY_CWD="/path/to/your/project" npm run sdk:responses
+```
+
+On Justin's local machine, `opencode-cursor` does that setup automatically for the current directory and then launches OpenCode:
+
+```bash
+cd /path/to/your/project
+opencode-cursor
 ```
 
 Add a custom provider to `~/.config/opencode/opencode.json`:

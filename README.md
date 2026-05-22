@@ -77,6 +77,19 @@ OpenCode works best against the local SDK bridge, which exposes a stateful
 Responses API and lets the Cursor SDK run its local agent tools in the target
 project directory.
 
+Local bridge base URL:
+
+```txt
+http://127.0.0.1:8791/v1
+```
+
+Local bridge endpoints:
+
+- `POST /v1/responses`
+- `GET /v1/responses/{response_id}`
+- `GET /v1/models`
+- `GET /v1/health`
+
 ```bash
 export CURSOR_API_KEY="crsr_..."
 CURSOR_SDK_PROXY_CWD="/path/to/project" npm run sdk:responses
@@ -84,6 +97,9 @@ CURSOR_SDK_PROXY_CWD="/path/to/project" npm run sdk:responses
 
 Configure OpenCode with `@ai-sdk/openai` and `http://127.0.0.1:8791/v1` as the
 base URL, then use `cursor-sdk/composer-2.5`.
+
+On Justin's local machine, the `opencode-cursor` launcher starts that bridge for
+the current directory and opens OpenCode with the correct model.
 
 ## Local development
 
