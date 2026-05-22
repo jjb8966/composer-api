@@ -171,6 +171,7 @@ describe("Worker", () => {
         body: JSON.stringify({
           model: "composer-2.5",
           stream: true,
+          stream_options: { include_usage: true },
           messages: [{ role: "user", content: "Say hello" }]
         })
       }),
@@ -185,6 +186,9 @@ describe("Worker", () => {
     expect(body).toContain('"object":"chat.completion.chunk"');
     expect(body).toContain('"content":"Hello from Composer"');
     expect(body).toContain('"finish_reason":"stop"');
+    expect(body).toContain('"choices":[]');
+    expect(body).toContain('"usage"');
+    expect(body).toContain('"total_usd"');
     expect(body).toContain("data: [DONE]");
 
     expect(db.requestLogs.size).toBe(0);
@@ -274,18 +278,20 @@ describe("Worker", () => {
   it("serves a separate OpenCode chat route with tool calls", async () => {
     const db = new FakeD1();
     const env = makeEnv(db);
-    const { deps } = fakeDeps();
+    const { deps, chatRequestBodies } = fakeDeps();
 
     const response = await handleRequest(
       new Request("https://composer.test/opencode/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: "Bearer cursor_direct_key"
+          Authorization: "Bearer cursor_direct_key",
+          "x-session-affinity": "session-one"
         },
         body: JSON.stringify({
           model: "composer-2.5",
           stream: true,
+          stream_options: { include_usage: true },
           messages: [{ role: "user", content: "List files" }],
           tools: [{ type: "function", function: { name: "glob" } }]
         })
@@ -301,7 +307,47 @@ describe("Worker", () => {
     expect(body).toContain('"tool_calls"');
     expect(body).toContain('"name":"glob"');
     expect(body).toContain('"finish_reason":"tool_calls"');
+    expect(body).toContain('"choices":[]');
+    expect(body).toContain('"usage"');
     expect(db.requestLogs.size).toBe(0);
+    expect(stableConversationIds(chatRequestBodies)).toHaveLength(1);
+  });
+
+  it("keeps OpenCode conversation ids stable for a session-affinity header", async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const { deps, chatRequestBodies } = fakeDeps();
+
+    for (const affinity of ["session-one", "session-one", "session-two"]) {
+      const response = await handleRequest(
+        new Request("https://composer.test/opencode/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer cursor_direct_key",
+            "x-session-affinity": affinity
+          },
+          body: JSON.stringify({
+            model: "composer-2.5",
+            messages: [{ role: "user", content: "Say hello" }]
+          })
+        }),
+        env,
+        fakeCtx(),
+        deps
+      );
+      expect(response.status).toBe(200);
+      await response.json();
+    }
+
+    const ids = stableConversationIds(chatRequestBodies);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[0]);
+    for (const body of chatRequestBodies) {
+      expect(body).toContain("This request is already in Agent mode.");
+      expect(body).toContain("Switched to agent mode successfully");
+      expect(body).toContain("Agent");
+    }
   });
 
   it("labels the OpenCode model without changing the standard model list", async () => {
@@ -328,10 +374,11 @@ describe("Worker", () => {
 
     expect(standard.status).toBe(200);
     expect(opencode.status).toBe(200);
-    const standardBody = (await standard.json()) as { data: Array<{ id: string; name: string }> };
-    const opencodeBody = (await opencode.json()) as { data: Array<{ id: string; name: string }> };
+    const standardBody = (await standard.json()) as { data: Array<{ id: string; name: string; cost?: { input: number; output: number } }> };
+    const opencodeBody = (await opencode.json()) as { data: Array<{ id: string; name: string; cost?: { input: number; output: number } }> };
     expect(standardBody.data.find((model) => model.id === "composer-2.5")?.name).toBe("Cursor Composer 2.5");
-    expect(opencodeBody.data.find((model) => model.id === "composer-2.5")?.name).toBe("Composer 2.5 via Cursor API");
+    expect(opencodeBody.data.find((model) => model.id === "composer-2.5")?.name).toBe("Cursor 2.5");
+    expect(opencodeBody.data.find((model) => model.id === "composer-2.5")?.cost).toEqual({ input: 0.5, output: 2.5 });
   });
 
   it("streams SSE response events in direct mode for /v1/responses", async () => {
@@ -526,10 +573,17 @@ describe("Worker", () => {
   });
 });
 
-function fakeDeps(): { deps: Deps; exchangeAuthHeaders: string[]; chatAuthHeaders: string[]; chatRequestHeaders: Headers[] } {
+function fakeDeps(): {
+  deps: Deps;
+  exchangeAuthHeaders: string[];
+  chatAuthHeaders: string[];
+  chatRequestHeaders: Headers[];
+  chatRequestBodies: string[];
+} {
   const exchangeAuthHeaders: string[] = [];
   const chatAuthHeaders: string[] = [];
   const chatRequestHeaders: Headers[] = [];
+  const chatRequestBodies: string[] = [];
   const deps: Deps = {
     now: () => new Date("2026-05-20T12:00:00.000Z"),
     randomUUID: () => "00000000-0000-4000-8000-000000000000",
@@ -556,6 +610,7 @@ function fakeDeps(): { deps: Deps; exchangeAuthHeaders: string[]; chatAuthHeader
         chatRequestHeaders.push(headers);
         expect(headers.get("content-type")).toContain("application/connect+proto");
         const requestText = decodeRequestBody(init.body);
+        chatRequestBodies.push(requestText);
         if (requestText.includes("Trigger Cursor error")) {
           return new Response(
             new ReadableStream<Uint8Array>({
@@ -607,7 +662,17 @@ function fakeDeps(): { deps: Deps; exchangeAuthHeaders: string[]; chatAuthHeader
       return new Response("not found", { status: 404 });
     }
   };
-  return { deps, exchangeAuthHeaders, chatAuthHeaders, chatRequestHeaders };
+  return { deps, exchangeAuthHeaders, chatAuthHeaders, chatRequestHeaders, chatRequestBodies };
+}
+
+function stableConversationIds(requestBodies: string[]): string[] {
+  const randomUuid = "00000000-0000-4000-8000-000000000000";
+  return requestBodies.map((body) => {
+    const matches = body.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g) ?? [];
+    const conversationId = matches.find((match) => match !== randomUuid);
+    expect(conversationId).toBeTruthy();
+    return conversationId || "";
+  });
 }
 
 function cursorError(title: string, detail: string): Uint8Array {

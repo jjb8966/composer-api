@@ -51,13 +51,15 @@ export async function createCursorCompletion(
   env: Env,
   deps: Deps,
   apiKey: string,
-  input: { prompt: CursorPrompt; model?: { id: string } }
+  input: { prompt: CursorPrompt; model?: { id: string }; conversationKey?: string }
 ): Promise<CursorCompletion> {
   const images = await resolveCursorImages(input.prompt.images ?? [], deps);
   const cursorIdentity = await getCursorAccountIdentity(env, deps, apiKey);
   const accessToken = await exchangeCursorApiKey(env, deps, apiKey);
   const requestId = deps.randomUUID();
-  const conversationId = deps.randomUUID();
+  const conversationId = input.conversationKey
+    ? await stableUuid("composer-api-conversation", `${cursorIdentity}:${input.conversationKey}`)
+    : deps.randomUUID();
   const requestBody = encodeConnectFrame(
     encodeCursorChatRequest({
       prompt: input.prompt,

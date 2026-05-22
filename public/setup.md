@@ -92,6 +92,8 @@ print(response.output_text)
 
 OpenCode should use the hosted OpenCode route, not the generic `/v1` route. The OpenCode route is still a normal OpenAI-compatible Chat Completions API, but it preserves OpenCode's local tool loop: the proxy turns Cursor tool-call output into `tool_calls`, and OpenCode executes those tools in your project.
 
+Streaming requests return the final OpenAI-style usage chunk when OpenCode asks for usage. Token counts are estimated from the prompt and output text, and the displayed cost uses Cursor's published Composer 2.5 standard rate.
+
 The OpenCode base URL is:
 
 ```txt
@@ -119,7 +121,11 @@ Add a custom provider to `~/.config/opencode/opencode.json`:
       },
       "models": {
         "composer-2.5": {
-          "name": "Composer 2.5 via Cursor API",
+          "name": "Cursor 2.5",
+          "cost": {
+            "input": 0.5,
+            "output": 2.5
+          },
           "limit": {
             "context": 200000,
             "output": 65536
@@ -138,7 +144,7 @@ export CURSOR_API_KEY="crsr_..."
 opencode
 ```
 
-If you do not set `model`, run `/models` inside OpenCode and choose `cursor/composer-2.5`, displayed as **Composer 2.5 via Cursor API**.
+If you do not set `model`, run `/models` inside OpenCode and choose `cursor/composer-2.5`, displayed as **Cursor 2.5**.
 
 ## cURL
 

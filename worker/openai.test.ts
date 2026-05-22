@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { prepareChatRequest, prepareResponsesRequest, chatCompletionResponse, responseObject, toOpenAiToolCalls } from "./openai";
+import { prepareChatRequest, prepareResponsesRequest, chatCompletionResponse, chatUsageChunk, responseObject, toOpenAiToolCalls } from "./openai";
 
 describe("OpenAI compatibility adapter", () => {
   it("converts chat messages and image URLs into Cursor prompts", () => {
@@ -171,7 +171,16 @@ describe("OpenAI compatibility adapter", () => {
     });
     expect(chat).toMatchObject({
       object: "chat.completion",
-      choices: [{ message: { role: "assistant", content: "hello" } }]
+      choices: [{ message: { role: "assistant", content: "hello" } }],
+      usage: {
+        cost: {
+          estimated: true,
+          pricing: {
+            input_per_million_tokens_usd: 0.5,
+            output_per_million_tokens_usd: 2.5
+          }
+        }
+      }
     });
 
     const response = responseObject({
@@ -183,8 +192,34 @@ describe("OpenAI compatibility adapter", () => {
     });
     expect(response).toMatchObject({
       object: "response",
-      output: [{ type: "message", content: [{ type: "output_text", text: "hello" }] }]
+      output: [{ type: "message", content: [{ type: "output_text", text: "hello" }] }],
+      usage: {
+        cost: {
+          estimated: true,
+          pricing: {
+            input_per_million_tokens_usd: 0.5,
+            output_per_million_tokens_usd: 2.5
+          }
+        }
+      }
     });
+  });
+
+  it("emits an OpenAI-style final usage chunk for streamed chat", () => {
+    const chunk = new TextDecoder().decode(
+      chatUsageChunk({
+        id: "chatcmpl_test",
+        created: 1,
+        model: "composer-2.5",
+        promptChars: 20,
+        completionChars: 5
+      })
+    );
+
+    expect(chunk).toContain('"choices":[]');
+    expect(chunk).toContain('"usage"');
+    expect(chunk).toContain('"total_tokens"');
+    expect(chunk).toContain('"total_usd"');
   });
 
   it("returns OpenAI-shaped tool call responses", () => {

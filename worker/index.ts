@@ -4,6 +4,8 @@ import { bearerToken, errorResponse, HttpError, json, notFound, openAiError, opt
 import {
   chatChunk,
   chatCompletionResponse,
+  chatUsageChunk,
+  completionCharsFromOutput,
   doneChunk,
   modelList,
   prepareChatRequest,
@@ -189,7 +191,9 @@ async function handleOpenAiRoute(
   const requestedModel = typeof (body as { model?: unknown })?.model === "string" ? (body as { model: string }).model : "composer-2.5";
   const cursorModel = resolveCursorModel(requestedModel);
   const prepared =
-    route.kind === "chat" ? prepareChatRequest(body, cursorModel) : prepareResponsesRequest(body, cursorModel);
+    route.kind === "chat"
+      ? prepareChatRequest(body, cursorModel, { forceAgentMode: route.surface === "opencode" })
+      : prepareResponsesRequest(body, cursorModel);
   const id = `${route.kind === "chat" ? "chatcmpl" : "resp"}_${crypto.randomUUID().replaceAll("-", "")}`;
   const created = Math.floor(deps.now().getTime() / 1000);
 
@@ -210,7 +214,8 @@ async function handleOpenAiRoute(
   try {
     const completion = await createCursorCompletion(env, deps, auth.cursorApiKey, {
       prompt: prepared.prompt,
-      model: prepared.cursorModel
+      model: prepared.cursorModel,
+      conversationKey: route.surface === "opencode" ? sessionAffinity(request) : undefined
     });
 
     if (prepared.stream) {
@@ -219,12 +224,13 @@ async function handleOpenAiRoute(
         created,
         model: prepared.model,
         promptChars: prepared.promptChars,
+        includeUsage: prepared.includeUsage,
         metadata: prepared.responseMetadata,
         tools: prepared.tools,
-        onDone: (text) =>
+        onDone: (_text, completionChars) =>
           finishLog({
             status: "completed",
-            completionChars: text.length
+            completionChars
           }),
         onError: (error) =>
           finishLog({
@@ -240,7 +246,7 @@ async function handleOpenAiRoute(
       tools: prepared.tools,
       responseId: id
     });
-    const completionChars = output.text.length + toolCalls.reduce((sum, toolCall) => sum + toolCall.function.arguments.length, 0);
+    const completionChars = completionCharsFromOutput(output.text, toolCalls);
     await finishLog({
       status: "completed",
       completionChars
@@ -286,9 +292,10 @@ function streamOpenAiResponse(
     created: number;
     model: string;
     promptChars: number;
+    includeUsage: boolean;
     metadata?: Record<string, unknown>;
     tools: OpenAiToolSpec[];
-    onDone: (text: string) => Promise<void>;
+    onDone: (text: string, completionChars: number) => Promise<void>;
     onError: (error: unknown) => Promise<void>;
   },
   ctx: ExecutionContext
@@ -333,12 +340,24 @@ function streamOpenAiResponse(
       }
 
       if (kind === "chat") {
+        const completionChars = completionCharsFromOutput(text, streamedToolCalls);
         await writer.write(chatChunk({ id: input.id, created: input.created, model: input.model, finish: true, finishReason }));
+        if (input.includeUsage) {
+          await writer.write(
+            chatUsageChunk({
+              id: input.id,
+              created: input.created,
+              model: input.model,
+              promptChars: input.promptChars,
+              completionChars
+            })
+          );
+        }
         await writer.write(doneChunk());
       } else {
         for (const event of responseDoneEvents({ ...input, text, toolCalls: streamedToolCalls })) await writer.write(event);
       }
-      await input.onDone(text);
+      await input.onDone(text, completionCharsFromOutput(text, streamedToolCalls));
     } catch (error) {
       await input.onError(error);
       const message = error instanceof Error ? error.message : "Stream failed";
@@ -349,6 +368,14 @@ function streamOpenAiResponse(
   };
   ctx.waitUntil(pump());
   return sseResponse(readable);
+}
+
+function sessionAffinity(request: Request): string | undefined {
+  return (
+    request.headers.get("x-session-affinity") ||
+    request.headers.get("x-opencode-session-id") ||
+    request.headers.get("x-opencode-session")
+  )?.trim() || undefined;
 }
 
 async function authenticate(request: Request, env: Env, route: OpenAiRoute): Promise<AuthResult | null> {

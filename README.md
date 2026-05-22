@@ -11,7 +11,7 @@ Cursor does not expose Composer 2.5 as a raw OpenAI-compatible model endpoint. T
 - `POST /auth/exchange_user_api_key`
 - a private Cursor chat endpoint configured with `CURSOR_CHAT_ENDPOINT`
 
-Each request is stateless from the caller's perspective: the Worker creates a fresh request/conversation id, sends the full prompt, streams text back, and does not create a Cursor Cloud Agent. Chat Completions requests that include tools are sent in Composer Agent mode, and Composer tool-call markers are translated back into OpenAI-compatible `tool_calls`.
+Each generic `/v1` request is stateless from the caller's perspective: the Worker creates a fresh request/conversation id, sends the full prompt, streams text back, and does not create a Cursor Cloud Agent. The `/opencode/v1` route keeps the internal conversation id stable for OpenCode's session-affinity header while OpenCode still owns the local tool loop and resends the message/tool history. Chat Completions requests that include tools are sent in Composer Agent mode, and Composer tool-call markers are translated back into OpenAI-compatible `tool_calls`.
 
 ## Supported endpoints
 
@@ -69,7 +69,7 @@ These OpenAI features are intentionally rejected because Cursor does not expose 
 - OpenAI function/tool calls on the Responses API
 - background Responses API jobs
 
-Token usage is estimated from character counts because Cursor's stream does not return OpenAI token accounting.
+Token usage is estimated from character counts because Cursor's stream does not return OpenAI token accounting on this path. For Composer 2.5 and Composer 2.5 Fast, `usage.cost` is estimated from Cursor's published per-million-token pricing.
 
 ## OpenCode
 
@@ -90,7 +90,7 @@ OpenCode uses these endpoints:
 - `POST /opencode/v1/chat/completions`
 
 Configure the provider with `@ai-sdk/openai-compatible` and select
-`cursor/composer-2.5`, displayed as **Composer 2.5 via Cursor API**.
+`cursor/composer-2.5`, displayed as **Cursor 2.5**.
 
 ## Local development
 
