@@ -8,6 +8,8 @@ Use the OpenAI SDK, Vercel AI SDK, or any client that can set a custom base URL.
 
 Sign in at [cursor.com/dashboard](https://cursor.com/dashboard), open **Integrations -> API Keys**, and create a key. It should look like `crsr_...`.
 
+This does not work around Cursor usage, billing, or account limits. You need a Cursor account and subscription to use this API, and every request is authenticated with your own Cursor API key.
+
 ## Vercel AI SDK
 
 Use the Vercel AI SDK when you want streaming helpers, framework adapters, and the `streamText` primitives you already use in Next.js or other TypeScript apps. Configure its OpenAI-compatible provider with this proxy as the base URL, then choose a Cursor-backed model id.
@@ -110,6 +112,19 @@ Add a custom provider to `~/.config/opencode/opencode.json`:
         }
       }
     }
+  },
+  "agent": {
+    "build": {
+      "tools": {
+        "*": false
+      }
+    },
+    "plan": {
+      "model": "cursor/composer-2.5",
+      "tools": {
+        "*": false
+      }
+    }
   }
 }
 ```
@@ -122,6 +137,8 @@ opencode
 ```
 
 If you do not set `model`, run `/models` inside OpenCode and choose `cursor/composer-2.5`.
+
+OpenCode normally sends file-editing tools to coding agents. This proxy does not expose OpenAI tool calling, so the example disables OpenCode tools for the `build` and `plan` agents.
 
 ## cURL
 
