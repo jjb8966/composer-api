@@ -93,6 +93,8 @@ Token usage is estimated from character counts because Cursor's stream does not 
 
 ## OpenCode
 
+![Composer 2.5 in OpenCode](public/opencode-composer-2-5.webp)
+
 OpenCode should use the hosted OpenCode route, not the generic `/v1` route. The
 OpenCode route keeps tool execution local to OpenCode: the Worker translates
 Cursor tool-call output into OpenAI-compatible `tool_calls`, then OpenCode runs
