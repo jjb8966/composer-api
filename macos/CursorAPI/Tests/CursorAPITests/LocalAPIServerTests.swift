@@ -33,6 +33,49 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertTrue(text.contains("composer-2.5-fast"))
     }
 
+    func testModelRetrieveEndpoint() async throws {
+        let port = UInt16(Int.random(in: 39_000...49_000))
+        let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness())
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let (data, response) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/models/composer-2.5-fast")!)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["id"] as? String, "composer-2.5-fast")
+        XCTAssertEqual(object["object"] as? String, "model")
+        XCTAssertEqual(object["owned_by"] as? String, "cursor")
+        XCTAssertEqual(object["name"] as? String, "Composer 2.5 Fast")
+    }
+
+    func testModelRetrieveEndpointAcceptsDashAlias() async throws {
+        let port = UInt16(Int.random(in: 39_000...49_000))
+        let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness())
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let (data, response) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/models/composer-2-5-fast")!)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["id"] as? String, "composer-2.5-fast")
+    }
+
+    func testUnknownModelRetrieveEndpointReturns404() async throws {
+        let port = UInt16(Int.random(in: 39_000...49_000))
+        let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness())
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let (_, response) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/models/not-a-model")!)
+
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+    }
+
     func testCORSPreflightAllowsSessionHeaders() async throws {
         let port = UInt16(Int.random(in: 63_001...64_000))
         let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness())

@@ -165,13 +165,16 @@ public enum ComposerModels {
         ComposerModel(id: "composer-2.5-fast", name: "Composer 2.5 Fast", inputCost: 3.0, outputCost: 15.0)
     ]
 
-    public static func cursorModelID(for model: String) -> String {
-        switch model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "composer-2.5-fast", "composer-2-5-fast":
-            return "composer-2.5-fast"
-        default:
-            return "composer-2.5"
+    public static func model(for id: String) -> ComposerModel? {
+        let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return all.first { model in
+            model.id.lowercased() == normalized
+                || model.id.replacingOccurrences(of: ".", with: "-").lowercased() == normalized
         }
+    }
+
+    public static func cursorModelID(for model: String) -> String {
+        Self.model(for: model)?.id ?? "composer-2.5"
     }
 }
 

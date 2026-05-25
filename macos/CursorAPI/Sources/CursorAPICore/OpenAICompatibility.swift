@@ -24,19 +24,21 @@ public enum OpenAICompatibility {
     public static func modelList() -> [String: Any] {
         [
             "object": "list",
-            "data": ComposerModels.all.map { model in
-                [
-                    "id": model.id,
-                    "object": "model",
-                    "created": 1_779_148_800,
-                    "owned_by": "cursor",
-                    "name": model.name,
-                    "cost": [
-                        "input": model.inputCost,
-                        "output": model.outputCost
-                    ]
-                ] as [String: Any]
-            }
+            "data": ComposerModels.all.map(modelObject)
+        ]
+    }
+
+    public static func modelObject(_ model: ComposerModel) -> [String: Any] {
+        [
+            "id": model.id,
+            "object": "model",
+            "created": 1_779_148_800,
+            "owned_by": "cursor",
+            "name": model.name,
+            "cost": [
+                "input": model.inputCost,
+                "output": model.outputCost
+            ]
         ]
     }
 

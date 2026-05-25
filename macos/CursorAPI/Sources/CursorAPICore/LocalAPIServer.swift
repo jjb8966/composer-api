@@ -105,6 +105,12 @@ public final class LocalAPIServer: @unchecked Sendable {
             if request.method == "GET", request.path == "/v1/models" {
                 return try .response(withCORS(HTTPResponse.json(OpenAICompatibility.modelList())))
             }
+            if request.method == "GET", let modelID = modelID(from: request.path) {
+                guard let model = ComposerModels.model(for: modelID) else {
+                    throw CursorAPIError.notFound
+                }
+                return try .response(withCORS(HTTPResponse.json(OpenAICompatibility.modelObject(model))))
+            }
             if request.method == "POST", request.path == "/v1/chat/completions" {
                 var prepared = try OpenAICompatibility.prepareChatRequest(request.body)
                 prepared.sessionKey = sessionAffinity(request)
@@ -436,6 +442,14 @@ public final class LocalAPIServer: @unchecked Sendable {
 
     private func responseID(from path: String) -> String? {
         let prefix = "/v1/responses/"
+        guard path.hasPrefix(prefix) else { return nil }
+        let value = String(path.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !value.contains("/") else { return nil }
+        return value
+    }
+
+    private func modelID(from path: String) -> String? {
+        let prefix = "/v1/models/"
         guard path.hasPrefix(prefix) else { return nil }
         let value = String(path.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, !value.contains("/") else { return nil }
