@@ -567,6 +567,78 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertNil(arguments["timeout"])
     }
 
+    func testShellToolCallsDetachLikelyDevServers() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"run a server"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"bash",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "command":{"type":"string"}
+                  }
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "shell", arguments: [
+            "command": .string("python3 -m http.server 8080")
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+        let command = try XCTUnwrap(arguments["command"] as? String)
+
+        XCTAssertTrue(command.contains("nohup sh -lc 'python3 -m http.server 8080'"))
+        XCTAssertTrue(command.contains("/tmp/api-for-cursor/dev-server-"))
+        XCTAssertTrue(command.contains("Started background process"))
+    }
+
+    func testShellToolCallsKeepAlreadyDetachedDevServers() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"run a server"}],
+          "tools":[{"type":"function","function":{"name":"bash","parameters":{"type":"object","properties":{"command":{"type":"string"}}}}}]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "shell", arguments: [
+            "command": .string("npm run dev > dev.log 2>&1 &")
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(arguments["command"] as? String, "npm run dev > dev.log 2>&1 &")
+    }
+
     func testResponsesFunctionCallsMapSDKWriteToClientFileSchema() throws {
         let prepared = try OpenAICompatibility.prepareResponsesRequest(Data(#"""
         {

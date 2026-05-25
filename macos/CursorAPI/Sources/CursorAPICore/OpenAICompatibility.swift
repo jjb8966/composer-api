@@ -1040,7 +1040,58 @@ public enum OpenAICompatibility {
             }
         }
 
+        if canonical == "shell",
+           let commandKey = propertyName(matching: ["command", "cmd", "script", "input"], in: properties),
+           let command = output[commandKey]?.stringValue,
+           shouldDetachShellCommand(command) {
+            output[commandKey] = .string(detachedShellCommand(command))
+        }
+
         return output.isEmpty ? arguments : output
+    }
+
+    private static func shouldDetachShellCommand(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let lower = trimmed.lowercased()
+        if trimmed.hasSuffix("&")
+            || lower.contains(" nohup ")
+            || lower.hasPrefix("nohup ")
+            || lower.contains(" disown")
+            || lower.hasPrefix("tmux ")
+            || lower.contains(" tmux ")
+            || lower.hasPrefix("screen ")
+            || lower.contains(" screen ")
+            || lower.contains(" --detach")
+            || lower.contains(" -d ") {
+            return false
+        }
+
+        let patterns = [
+            #"(?i)(^|[;&|]\s*)(python3?|uv)\s+-m\s+http\.server\b"#,
+            #"(?i)(^|[;&|]\s*)python3?\s+-m\s+simplehttpserver\b"#,
+            #"(?i)(^|[;&|]\s*)(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|preview)\b"#,
+            #"(?i)(^|[;&|]\s*)(vite|next|nuxt|astro|webpack-dev-server)\b"#,
+            #"(?i)(^|[;&|]\s*)webpack\s+serve\b"#,
+            #"(?i)(^|[;&|]\s*)python3?\s+manage\.py\s+runserver\b"#,
+            #"(?i)(^|[;&|]\s*)(flask\s+run|fastapi\s+dev|uvicorn|gunicorn)\b"#,
+            #"(?i)(^|[;&|]\s*)(rails\s+server|bin/rails\s+server|bundle\s+exec\s+rails\s+server)\b"#,
+            #"(?i)(^|[;&|]\s*)tail\s+-f\b"#,
+            #"(?i)(^|[;&|]\s*)(watchexec|nodemon|ts-node-dev)\b"#
+        ]
+        return patterns.contains { pattern in
+            trimmed.range(of: pattern, options: .regularExpression) != nil
+        }
+    }
+
+    private static func detachedShellCommand(_ command: String) -> String {
+        let logPath = "/tmp/api-for-cursor/dev-server-\(Int(Date().timeIntervalSince1970)).log"
+        return "mkdir -p /tmp/api-for-cursor && nohup sh -lc \(shellSingleQuoted(command)) > \(shellSingleQuoted(logPath)) 2>&1 < /dev/null & echo \"Started background process $! (log: \(logPath))\""
+    }
+
+    private static func shellSingleQuoted(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private static func strReplaceEditorArguments(_ arguments: [String: JSONValue], properties: [String]) -> [String: JSONValue] {
