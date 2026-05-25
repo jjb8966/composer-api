@@ -48,6 +48,10 @@ public enum OpenAICompatibility {
             "cost": [
                 "input": model.inputCost,
                 "output": model.outputCost
+            ],
+            "limit": [
+                "context": model.contextWindow,
+                "output": model.outputLimit
             ]
         ]
     }

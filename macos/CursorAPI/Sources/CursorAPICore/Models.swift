@@ -150,12 +150,23 @@ public struct ComposerModel: Codable, Equatable, Sendable {
     public var name: String
     public var inputCost: Double
     public var outputCost: Double
+    public var contextWindow: Int
+    public var outputLimit: Int
 
-    public init(id: String, name: String, inputCost: Double, outputCost: Double) {
+    public init(
+        id: String,
+        name: String,
+        inputCost: Double,
+        outputCost: Double,
+        contextWindow: Int = 200_000,
+        outputLimit: Int = 65_536
+    ) {
         self.id = id
         self.name = name
         self.inputCost = inputCost
         self.outputCost = outputCost
+        self.contextWindow = contextWindow
+        self.outputLimit = outputLimit
     }
 }
 

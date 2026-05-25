@@ -14,6 +14,13 @@ final class AgentProvisionerTests: XCTestCase {
         XCTAssertTrue(text.contains(CursorAPIBrand.displayName))
         XCTAssertTrue(text.contains("cursor-local"))
         XCTAssertTrue(text.contains("composer-2.5-fast"))
+
+        let root = try readJSONObject(config)
+        let providers = try XCTUnwrap(root["provider"] as? [String: Any])
+        let cursorProvider = try XCTUnwrap(providers["cursorapi"] as? [String: Any])
+        let models = try XCTUnwrap(cursorProvider["models"] as? [String: Any])
+        let fast = try XCTUnwrap(models["composer-2.5-fast"] as? [String: Any])
+        assertComposerMetadata(fast, inputCost: 3.0, outputCost: 15.0)
         XCTAssertTrue(provisioner.status(for: .opencode, settings: settings).installed)
     }
 
@@ -95,6 +102,15 @@ final class AgentProvisionerTests: XCTestCase {
         XCTAssertTrue(text.contains("openai-completions"))
         XCTAssertTrue(text.contains("cursor-local"))
         XCTAssertTrue(text.contains("cursorapi"))
+
+        let root = try readJSONObject(config)
+        let providers = try XCTUnwrap(root["providers"] as? [String: Any])
+        let cursorProvider = try XCTUnwrap(providers["cursorapi"] as? [String: Any])
+        let models = try XCTUnwrap(cursorProvider["models"] as? [[String: Any]])
+        let fast = try XCTUnwrap(models.first { $0["id"] as? String == "composer-2.5-fast" })
+        assertComposerMetadata(fast, inputCost: 3.0, outputCost: 15.0)
+        XCTAssertEqual((fast["maxTokens"] as? NSNumber)?.intValue, 65_536)
+        XCTAssertEqual((fast["contextWindow"] as? NSNumber)?.intValue, 200_000)
         XCTAssertTrue(provisioner.status(for: .pi, settings: settings).installed)
     }
 
@@ -112,6 +128,11 @@ final class AgentProvisionerTests: XCTestCase {
         XCTAssertTrue(clineText.contains(#""actModeOpenAiModelInfo""#))
         XCTAssertTrue(clineText.contains(#""planModeOpenAiModelInfo""#))
         XCTAssertTrue(clineText.contains(#""supportsTools" : true"#))
+        let clineGlobal = try readJSONObject(clineGlobalState)
+        let clineFastInfo = try XCTUnwrap(clineGlobal["planModeOpenAiModelInfo"] as? [String: Any])
+        XCTAssertEqual((clineFastInfo["maxTokens"] as? NSNumber)?.intValue, 65_536)
+        XCTAssertEqual((clineFastInfo["contextWindow"] as? NSNumber)?.intValue, 200_000)
+        XCTAssertEqual((clineFastInfo["outputPrice"] as? NSNumber)?.doubleValue, 15.0)
 
         let clineSecrets = home.appending(path: ".cline/data/secrets.json")
         let clineSecretsText = try String(contentsOf: clineSecrets, encoding: .utf8)
@@ -120,6 +141,12 @@ final class AgentProvisionerTests: XCTestCase {
         let kiloConfig = home.appending(path: ".config/kilo/kilo.jsonc")
         let kiloText = try String(contentsOf: kiloConfig, encoding: .utf8)
         XCTAssertTrue(kiloText.contains("cursor-local"))
+        let kiloRoot = try readJSONObject(kiloConfig)
+        let kiloProviders = try XCTUnwrap(kiloRoot["provider"] as? [String: Any])
+        let kiloProvider = try XCTUnwrap(kiloProviders["cursorapi"] as? [String: Any])
+        let kiloModels = try XCTUnwrap(kiloProvider["models"] as? [String: Any])
+        let kiloFast = try XCTUnwrap(kiloModels["composer-2.5-fast"] as? [String: Any])
+        assertComposerMetadata(kiloFast, inputCost: 3.0, outputCost: 15.0)
         XCTAssertTrue(provisioner.status(for: .cline, settings: settings).installed)
         XCTAssertTrue(provisioner.status(for: .kilo, settings: settings).installed)
     }
@@ -221,5 +248,25 @@ final class AgentProvisionerTests: XCTestCase {
 
     private func countOccurrences(of needle: String, in text: String) -> Int {
         text.components(separatedBy: needle).count - 1
+    }
+
+    private func readJSONObject(_ url: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: url)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func assertComposerMetadata(
+        _ metadata: [String: Any],
+        inputCost: Double,
+        outputCost: Double,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let cost = metadata["cost"] as? [String: Any]
+        XCTAssertEqual((cost?["input"] as? NSNumber)?.doubleValue, inputCost, file: file, line: line)
+        XCTAssertEqual((cost?["output"] as? NSNumber)?.doubleValue, outputCost, file: file, line: line)
+        let limit = metadata["limit"] as? [String: Any]
+        XCTAssertEqual((limit?["context"] as? NSNumber)?.intValue, 200_000, file: file, line: line)
+        XCTAssertEqual((limit?["output"] as? NSNumber)?.intValue, 65_536, file: file, line: line)
     }
 }

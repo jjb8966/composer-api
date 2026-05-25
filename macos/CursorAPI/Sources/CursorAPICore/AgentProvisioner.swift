@@ -69,14 +69,7 @@ public final class AgentProvisioner: @unchecked Sendable {
                 "baseURL": settings.baseURL.absoluteString,
                 "apiKey": "cursor-local"
             ],
-            "models": [
-                "composer-2.5": [
-                    "name": "Composer 2.5"
-                ],
-                "composer-2.5-fast": [
-                    "name": "Composer 2.5 Fast"
-                ]
-            ]
+            "models": opencodeModelDefinitions()
         ]
         root["provider"] = provider
         if root["model"] == nil {
@@ -232,8 +225,8 @@ public final class AgentProvisioner: @unchecked Sendable {
     private func clineModelInfo(for id: String) -> [String: Any] {
         let model = ComposerModels.model(for: id) ?? ComposerModels.all[0]
         return [
-            "maxTokens": 16_384,
-            "contextWindow": 128_000,
+            "maxTokens": model.outputLimit,
+            "contextWindow": model.contextWindow,
             "supportsImages": true,
             "supportsPromptCache": false,
             "inputPrice": model.inputCost,
@@ -255,20 +248,8 @@ public final class AgentProvisioner: @unchecked Sendable {
                 "apiKey": "cursor-local"
             ],
             "models": [
-                "composer-2.5": [
-                    "name": "Composer 2.5",
-                    "limit": [
-                        "context": 128_000,
-                        "output": 16_384
-                    ]
-                ],
-                "composer-2.5-fast": [
-                    "name": "Composer 2.5 Fast",
-                    "limit": [
-                        "context": 128_000,
-                        "output": 16_384
-                    ]
-                ]
+                "composer-2.5": agentModelDefinition(ComposerModels.all[0]),
+                "composer-2.5-fast": agentModelDefinition(ComposerModels.all[1])
             ]
         ]
         root["provider"] = provider
@@ -322,36 +303,45 @@ public final class AgentProvisioner: @unchecked Sendable {
     }
 
     private func piModelDefinitions() -> [[String: Any]] {
+        ComposerModels.all.map { model in
+            var definition = agentModelDefinition(model)
+            definition["id"] = model.id
+            definition["api"] = "openai-completions"
+            definition["reasoning"] = false
+            definition["input"] = ["text"]
+            definition["contextWindow"] = model.contextWindow
+            definition["maxTokens"] = model.outputLimit
+            definition["cost"] = [
+                "input": model.inputCost,
+                "output": model.outputCost,
+                "cacheRead": 0,
+                "cacheWrite": 0
+            ]
+            definition["compat"] = [
+                "supportsUsageInStreaming": true,
+                "maxTokensField": "max_tokens",
+                "requiresAssistantAfterToolResult": false
+            ]
+            return definition
+        }
+    }
+
+    private func opencodeModelDefinitions() -> [String: Any] {
+        Dictionary(uniqueKeysWithValues: ComposerModels.all.map { model in
+            (model.id, agentModelDefinition(model))
+        })
+    }
+
+    private func agentModelDefinition(_ model: ComposerModel) -> [String: Any] {
         [
-            [
-                "id": "composer-2.5",
-                "name": "Composer 2.5",
-                "api": "openai-completions",
-                "reasoning": false,
-                "input": ["text"],
-                "contextWindow": 128_000,
-                "maxTokens": 16_384,
-                "cost": ["input": 0.5, "output": 2.5, "cacheRead": 0, "cacheWrite": 0],
-                "compat": [
-                    "supportsUsageInStreaming": true,
-                    "maxTokensField": "max_tokens",
-                    "requiresAssistantAfterToolResult": false
-                ]
+            "name": model.name,
+            "cost": [
+                "input": model.inputCost,
+                "output": model.outputCost
             ],
-            [
-                "id": "composer-2.5-fast",
-                "name": "Composer 2.5 Fast",
-                "api": "openai-completions",
-                "reasoning": false,
-                "input": ["text"],
-                "contextWindow": 128_000,
-                "maxTokens": 16_384,
-                "cost": ["input": 3.0, "output": 15.0, "cacheRead": 0, "cacheWrite": 0],
-                "compat": [
-                    "supportsUsageInStreaming": true,
-                    "maxTokensField": "max_tokens",
-                    "requiresAssistantAfterToolResult": false
-                ]
+            "limit": [
+                "context": model.contextWindow,
+                "output": model.outputLimit
             ]
         ]
     }

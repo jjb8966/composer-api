@@ -119,6 +119,9 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(object["object"] as? String, "model")
         XCTAssertEqual(object["owned_by"] as? String, "cursor")
         XCTAssertEqual(object["name"] as? String, "Composer 2.5 Fast")
+        let limit = try XCTUnwrap(object["limit"] as? [String: Any])
+        XCTAssertEqual((limit["context"] as? NSNumber)?.intValue, 200_000)
+        XCTAssertEqual((limit["output"] as? NSNumber)?.intValue, 65_536)
     }
 
     func testModelRetrieveEndpointAcceptsDashAlias() async throws {
