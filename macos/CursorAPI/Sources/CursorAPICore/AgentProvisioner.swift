@@ -164,7 +164,7 @@ public final class AgentProvisioner: @unchecked Sendable {
     private func extensionStatus(id: AgentIntegrationID, settings: CursorAPISettings) -> AgentIntegrationStatus {
         if id == .cline {
             let url = clineGlobalStateURL()
-            let installed = fileManager.fileExists(atPath: url.path) && jsonFileContains(url, needle: settings.baseURL.absoluteString)
+            let installed = clineConfigMatches(settings: settings)
             return AgentIntegrationStatus(id: id, installed: installed, configPath: url.path, detail: installed ? "Provider profile installed" : "Ready to install")
         }
         if id == .kilo {
@@ -188,13 +188,31 @@ public final class AgentProvisioner: @unchecked Sendable {
         return AgentIntegrationStatus(id: .pi, installed: installed, configPath: url.path, detail: installed ? "Custom models installed" : "Ready to install")
     }
 
+    private func clineConfigMatches(settings: CursorAPISettings) -> Bool {
+        let globalStateURL = clineGlobalStateURL()
+        let secretsURL = clineSecretsURL()
+        guard fileManager.fileExists(atPath: globalStateURL.path),
+              let globalState = try? readJSONObject(globalStateURL, defaultValue: [:]) else {
+            return false
+        }
+        return globalState["actModeApiProvider"] as? String == "openai"
+            && globalState["planModeApiProvider"] as? String == "openai"
+            && globalState["actModeOpenAiModelId"] as? String == "composer-2.5"
+            && globalState["planModeOpenAiModelId"] as? String == "composer-2.5-fast"
+            && globalState["openAiBaseUrl"] as? String == settings.baseURL.absoluteString
+            && jsonFileContains(secretsURL, needle: "cursor-local")
+    }
+
     private func installCline(settings: CursorAPISettings) throws {
         let globalStateURL = clineGlobalStateURL()
         var globalState = try readJSONObject(globalStateURL, defaultValue: [:])
         globalState["actModeApiProvider"] = "openai"
         globalState["planModeApiProvider"] = "openai"
         globalState["actModeOpenAiModelId"] = "composer-2.5"
-        globalState["planModeOpenAiModelId"] = "composer-2.5"
+        globalState["planModeOpenAiModelId"] = "composer-2.5-fast"
+        globalState["actModeOpenAiModelInfo"] = clineModelInfo(for: "composer-2.5")
+        globalState["planModeOpenAiModelInfo"] = clineModelInfo(for: "composer-2.5-fast")
+        globalState["openAiHeaders"] = [String: String]()
         globalState["openAiBaseUrl"] = settings.baseURL.absoluteString
         globalState["welcomeViewCompleted"] = true
         if globalState["remoteRulesToggles"] == nil {
@@ -209,6 +227,22 @@ public final class AgentProvisioner: @unchecked Sendable {
         var secrets = try readJSONObject(secretsURL, defaultValue: [:])
         secrets["openAiApiKey"] = "cursor-local"
         try writeJSONObject(secrets, to: secretsURL)
+    }
+
+    private func clineModelInfo(for id: String) -> [String: Any] {
+        let model = ComposerModels.model(for: id) ?? ComposerModels.all[0]
+        return [
+            "maxTokens": 16_384,
+            "contextWindow": 128_000,
+            "supportsImages": true,
+            "supportsPromptCache": false,
+            "inputPrice": model.inputCost,
+            "outputPrice": model.outputCost,
+            "temperature": 0,
+            "supportsTools": true,
+            "supportsStreaming": true,
+            "systemRole": "system"
+        ]
     }
 
     private func installKilo(settings: CursorAPISettings) throws {

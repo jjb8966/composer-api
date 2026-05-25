@@ -105,6 +105,18 @@ final class AgentProvisionerTests: XCTestCase {
         try provisioner.install(.cline, settings: settings)
         try provisioner.install(.kilo, settings: settings)
 
+        let clineGlobalState = home.appending(path: ".cline/data/globalState.json")
+        let clineText = try String(contentsOf: clineGlobalState, encoding: .utf8)
+        XCTAssertTrue(clineText.contains(#""actModeOpenAiModelId" : "composer-2.5""#))
+        XCTAssertTrue(clineText.contains(#""planModeOpenAiModelId" : "composer-2.5-fast""#))
+        XCTAssertTrue(clineText.contains(#""actModeOpenAiModelInfo""#))
+        XCTAssertTrue(clineText.contains(#""planModeOpenAiModelInfo""#))
+        XCTAssertTrue(clineText.contains(#""supportsTools" : true"#))
+
+        let clineSecrets = home.appending(path: ".cline/data/secrets.json")
+        let clineSecretsText = try String(contentsOf: clineSecrets, encoding: .utf8)
+        XCTAssertTrue(clineSecretsText.contains("cursor-local"))
+
         let kiloConfig = home.appending(path: ".config/kilo/kilo.jsonc")
         let kiloText = try String(contentsOf: kiloConfig, encoding: .utf8)
         XCTAssertTrue(kiloText.contains("cursor-local"))
@@ -186,20 +198,19 @@ final class AgentProvisionerTests: XCTestCase {
         try provisioner.install(.opencode, settings: original)
         try provisioner.install(.codex, settings: original)
         try provisioner.install(.vscode, settings: original)
+        try provisioner.install(.cline, settings: original)
+        try provisioner.install(.kilo, settings: original)
+        try provisioner.install(.pi, settings: original)
 
-        let opencode = provisioner.status(for: .opencode, settings: moved)
-        let codex = provisioner.status(for: .codex, settings: moved)
-        let vscode = provisioner.status(for: .vscode, settings: moved)
+        for id in AgentIntegrationID.allCases {
+            let status = provisioner.status(for: id, settings: moved)
+            XCTAssertFalse(status.installed, "\(id.displayName) should require the current local API URL")
+            XCTAssertTrue(status.canInstall, "\(id.displayName) should remain installable")
+        }
 
-        XCTAssertFalse(opencode.installed)
-        XCTAssertFalse(codex.installed)
-        XCTAssertFalse(vscode.installed)
-        XCTAssertTrue(opencode.canInstall)
-        XCTAssertTrue(codex.canInstall)
-        XCTAssertTrue(vscode.canInstall)
-        XCTAssertTrue(opencode.detail.contains("different local URL"))
-        XCTAssertTrue(codex.detail.contains("different local URL"))
-        XCTAssertTrue(vscode.detail.contains("different local URL"))
+        XCTAssertTrue(provisioner.status(for: .opencode, settings: moved).detail.contains("different local URL"))
+        XCTAssertTrue(provisioner.status(for: .codex, settings: moved).detail.contains("different local URL"))
+        XCTAssertTrue(provisioner.status(for: .vscode, settings: moved).detail.contains("different local URL"))
     }
 
     private func temporaryHome() throws -> URL {
