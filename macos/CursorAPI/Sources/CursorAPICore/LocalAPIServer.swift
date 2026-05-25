@@ -18,14 +18,19 @@ public final class LocalAPIServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "CursorAPI.LocalAPIServer")
     private let settingsProvider: SettingsProvider
     private let harness: any CursorSDKHarness
-    private let responseSessions = LocalResponseSessionStore()
+    private let responseSessions: LocalResponseSessionStore
     private var listener: NWListener?
 
     public private(set) var port: UInt16?
 
-    public init(settingsProvider: @escaping SettingsProvider, harness: any CursorSDKHarness = LocalCursorSDKHarness()) {
+    public init(
+        settingsProvider: @escaping SettingsProvider,
+        harness: any CursorSDKHarness = LocalCursorSDKHarness(),
+        responseStateLimit: Int = 512
+    ) {
         self.settingsProvider = settingsProvider
         self.harness = harness
+        self.responseSessions = LocalResponseSessionStore(maxEntries: responseStateLimit)
     }
 
     public func start(port: UInt16) throws {
@@ -112,7 +117,8 @@ public final class LocalAPIServer: @unchecked Sendable {
             }
             if request.method == "GET", path == "/health" {
                 let settings = settingsProvider()
-                return try .response(HTTPResponse.json(healthObject(settings: settings)))
+                let responseState = await responseSessions.stats()
+                return try .response(HTTPResponse.json(healthObject(settings: settings, responseState: responseState)))
             }
             if request.method == "GET", path == "/v1/models" {
                 return try .response(withCORS(HTTPResponse.json(OpenAICompatibility.modelList())))
@@ -582,7 +588,7 @@ public final class LocalAPIServer: @unchecked Sendable {
             ?? request.header("x-working-directory")?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
     }
 
-    private func healthObject(settings: CursorAPISettings) -> [String: Any] {
+    private func healthObject(settings: CursorAPISettings, responseState: LocalResponseSessionStore.Stats) -> [String: Any] {
         let keyExchangeConfigured = settings.hasCursorAPIExchangeConfiguration
         let backendConfigured = settings.backendBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty != nil
         let localAgentConfigured = settings.localAgentEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty != nil
@@ -613,6 +619,13 @@ public final class LocalAPIServer: @unchecked Sendable {
             "apiKeyConfigured": apiKeyConfigured,
             "missing": missing,
             "models": ComposerModels.all.map(\.id),
+            "responses": [
+                "sessions": responseState.sessions,
+                "stored": responseState.storedResponses,
+                "inputItems": responseState.inputItems,
+                "toolCallMemory": responseState.toolCallMemory,
+                "maxStored": responseState.maxEntries
+            ],
             "bridge": [
                 "configured": bridgeConfigured,
                 "keyExchangeConfigured": keyExchangeConfigured,
@@ -625,10 +638,24 @@ public final class LocalAPIServer: @unchecked Sendable {
 }
 
 private actor LocalResponseSessionStore {
+    struct Stats: Sendable {
+        var sessions: Int
+        var storedResponses: Int
+        var inputItems: Int
+        var toolCallMemory: Int
+        var maxEntries: Int
+    }
+
+    private let maxEntries: Int
+    private var responseOrder: [String] = []
     private var responseSessions: [String: String] = [:]
     private var storedResponses: [String: Data] = [:]
     private var storedResponseInputItems: [String: Data] = [:]
     private var storedResponseToolCalls: [String: [String: ResponseToolCallMemory]] = [:]
+
+    init(maxEntries: Int) {
+        self.maxEntries = max(1, maxEntries)
+    }
 
     func sessionKey(responseID: String, previousResponseID: String?, explicitSessionKey: String?) -> String {
         let sessionKey: String
@@ -642,29 +669,68 @@ private actor LocalResponseSessionStore {
             sessionKey = "response:\(responseID)"
         }
         responseSessions[responseID] = sessionKey
+        touch(responseID)
+        evictIfNeeded()
         return sessionKey
     }
 
     func storeResponse(responseID: String, responseData: Data, inputItemsData: Data) {
         storedResponses[responseID] = responseData
         storedResponseInputItems[responseID] = inputItemsData
+        touch(responseID)
+        evictIfNeeded()
     }
 
     func storeToolCalls(responseID: String, toolCalls: [String: ResponseToolCallMemory]) {
         guard !toolCalls.isEmpty else { return }
         storedResponseToolCalls[responseID] = toolCalls
+        touch(responseID)
+        evictIfNeeded()
     }
 
     func responseData(responseID: String) -> Data? {
-        storedResponses[responseID]
+        guard let data = storedResponses[responseID] else { return nil }
+        touch(responseID)
+        return data
     }
 
     func responseInputItemsData(responseID: String) -> Data? {
-        storedResponseInputItems[responseID]
+        guard let data = storedResponseInputItems[responseID] else { return nil }
+        touch(responseID)
+        return data
     }
 
     func responseToolCalls(responseID: String) -> [String: ResponseToolCallMemory] {
-        storedResponseToolCalls[responseID] ?? [:]
+        guard let toolCalls = storedResponseToolCalls[responseID] else { return [:] }
+        touch(responseID)
+        return toolCalls
+    }
+
+    func stats() -> Stats {
+        Stats(
+            sessions: responseSessions.count,
+            storedResponses: storedResponses.count,
+            inputItems: storedResponseInputItems.count,
+            toolCallMemory: storedResponseToolCalls.count,
+            maxEntries: maxEntries
+        )
+    }
+
+    private func touch(_ responseID: String) {
+        if let index = responseOrder.firstIndex(of: responseID) {
+            responseOrder.remove(at: index)
+        }
+        responseOrder.append(responseID)
+    }
+
+    private func evictIfNeeded() {
+        while responseOrder.count > maxEntries, let evicted = responseOrder.first {
+            responseOrder.removeFirst()
+            responseSessions.removeValue(forKey: evicted)
+            storedResponses.removeValue(forKey: evicted)
+            storedResponseInputItems.removeValue(forKey: evicted)
+            storedResponseToolCalls.removeValue(forKey: evicted)
+        }
     }
 }
 

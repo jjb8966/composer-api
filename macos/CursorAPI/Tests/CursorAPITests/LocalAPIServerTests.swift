@@ -22,6 +22,12 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(object["baseUrl"] as? String, "http://127.0.0.1:\(port)/v1")
         XCTAssertEqual(object["missing"] as? [String], ["cursorAPIKey", "cursorAPIBaseURL", "backendBaseURL", "localAgentEndpoint"])
         XCTAssertEqual(object["models"] as? [String], ["composer-2.5", "composer-2.5-fast"])
+        let responses = try XCTUnwrap(object["responses"] as? [String: Any])
+        XCTAssertEqual((responses["sessions"] as? NSNumber)?.intValue, 0)
+        XCTAssertEqual((responses["stored"] as? NSNumber)?.intValue, 0)
+        XCTAssertEqual((responses["inputItems"] as? NSNumber)?.intValue, 0)
+        XCTAssertEqual((responses["toolCallMemory"] as? NSNumber)?.intValue, 0)
+        XCTAssertEqual((responses["maxStored"] as? NSNumber)?.intValue, 512)
         let bridge = try XCTUnwrap(object["bridge"] as? [String: Any])
         XCTAssertEqual(bridge["configured"] as? Bool, false)
         XCTAssertEqual(bridge["keyExchangeConfigured"] as? Bool, false)
@@ -482,6 +488,41 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(retrieved?["object"] as? String, "response")
         XCTAssertEqual(inputItemsStatus, 200)
         XCTAssertEqual(inputItems?["object"] as? String, "list")
+    }
+
+    func testResponsesStateIsBoundedAndVisibleInHealth() async throws {
+        let port = UInt16(Int.random(in: 29_000...38_999))
+        let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness(), responseStateLimit: 2)
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let first = try await postResponse(port: port, body: #"{"model":"composer-2.5","input":"first"}"#)
+        let firstID = try XCTUnwrap(first["id"] as? String)
+        let second = try await postResponse(port: port, body: #"{"model":"composer-2.5","input":"second"}"#)
+        let secondID = try XCTUnwrap(second["id"] as? String)
+        let (firstStatusBeforeThird, _) = try await getResponse(port: port, responseID: firstID)
+        XCTAssertEqual(firstStatusBeforeThird, 200)
+
+        let third = try await postResponse(port: port, body: #"{"model":"composer-2.5","input":"third"}"#)
+        let thirdID = try XCTUnwrap(third["id"] as? String)
+
+        let (firstStatus, _) = try await getResponse(port: port, responseID: firstID)
+        let (secondStatus, _) = try await getResponse(port: port, responseID: secondID)
+        let (thirdStatus, _) = try await getResponse(port: port, responseID: thirdID)
+        XCTAssertEqual(firstStatus, 200)
+        XCTAssertEqual(secondStatus, 404)
+        XCTAssertEqual(thirdStatus, 200)
+
+        let (healthData, healthResponse) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/health")!)
+        XCTAssertEqual((healthResponse as? HTTPURLResponse)?.statusCode, 200)
+        let health = try XCTUnwrap(JSONSerialization.jsonObject(with: healthData) as? [String: Any])
+        let responses = try XCTUnwrap(health["responses"] as? [String: Any])
+        XCTAssertEqual((responses["sessions"] as? NSNumber)?.intValue, 2)
+        XCTAssertEqual((responses["stored"] as? NSNumber)?.intValue, 2)
+        XCTAssertEqual((responses["inputItems"] as? NSNumber)?.intValue, 2)
+        XCTAssertEqual((responses["toolCallMemory"] as? NSNumber)?.intValue, 0)
+        XCTAssertEqual((responses["maxStored"] as? NSNumber)?.intValue, 2)
     }
 
     func testResponsesPreviousResponseIDContinuesSameSDKSession() async throws {
