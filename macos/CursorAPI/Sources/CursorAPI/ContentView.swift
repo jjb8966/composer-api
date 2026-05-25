@@ -58,7 +58,7 @@ struct ContentView: View {
             Spacer()
 
             HStack(spacing: 8) {
-                StatusPill(tone: model.sdkConfigured ? .ok : .warning, text: model.sdkStatusText)
+                StatusPill(tone: model.sdkConfigured && model.hasCursorAPIKey ? .ok : .warning, text: model.sdkStatusText)
                 StatusPill(tone: model.isRunning ? .ok : .muted, text: model.isRunning ? "Running" : "Stopped")
                 HeaderPageTabs(selection: $topPage)
             }
@@ -223,6 +223,8 @@ struct HeaderPageTab: View {
         .accessibilityLabel(label)
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .focusable(false)
+        .focusEffectDisabled()
     }
 }
 
@@ -244,6 +246,8 @@ struct IconActionButton: View {
             .accessibilityAction {
                 action()
             }
+            .focusable(false)
+            .focusEffectDisabled()
     }
 }
 
@@ -391,9 +395,9 @@ struct TransportSetupPanel: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text("SDK transport setup needed")
+                Text("Composer bridge defaults missing")
                     .font(.callout.weight(.semibold))
-                Text("Package the app with bundled transport defaults or open Settings > Advanced Transport to configure local SDK routing.")
+                Text("This development build was packaged without bundled bridge routing. Repackage it with bridge defaults or inspect Settings > Advanced Bridge Overrides.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -482,7 +486,7 @@ struct SDKConnectivityPanel: View {
 
             Spacer()
 
-            PillActionButton(model.isCheckingSDK ? "Checking" : "Check SDK") {
+            PillActionButton(model.isCheckingSDK ? "Checking" : "Check Composer") {
                 model.checkSDKConnectivity()
             }
             .disabled(!model.canCheckSDK)
@@ -498,25 +502,25 @@ struct SDKConnectivityPanel: View {
 
     private var title: String {
         if model.isCheckingSDK {
-            return "Checking SDK"
+            return "Checking Composer"
         }
         switch model.sdkCheckState {
         case .idle:
-            return model.sdkConfigured ? "SDK Ready to Check" : "SDK Setup Needed"
+            return model.sdkConfigured ? "Composer Ready to Check" : "Bridge Missing"
         case .success:
-            return "SDK Check Passed"
+            return "Composer Check Passed"
         case .failure:
-            return "SDK Check Failed"
+            return "Composer Check Failed"
         }
     }
 
     private var detail: String {
         if model.isCheckingSDK {
-            return "Testing key exchange and HTTP/2 transport."
+            return "Testing key exchange and bridge transport."
         }
         switch model.sdkCheckState {
         case .idle:
-            return model.sdkConfigured ? "Ready to verify Composer through the local harness." : "Configure Advanced Transport before checking."
+            return model.sdkConfigured ? "Ready to verify Composer through the bundled local harness." : "This build is missing bundled bridge defaults."
         case .success(let message), .failure(let message):
             return message
         }
@@ -560,8 +564,8 @@ struct SettingsPage: View {
                 )
                 SettingsSummaryTile(
                     icon: model.isRunning ? "checkmark.circle.fill" : "power.circle",
-                    title: model.isRunning ? "API Running" : (model.sdkConfigured ? "Ready to Start" : "Setup Needed"),
-                    detail: model.isRunning ? model.baseURL : (model.sdkConfigured ? "Local endpoint" : "SDK transport"),
+                    title: model.isRunning ? "API Running" : (model.sdkConfigured ? (model.hasCursorAPIKey ? "Ready to Start" : "Needs Key") : "Bridge Missing"),
+                    detail: model.isRunning ? model.baseURL : (model.sdkConfigured ? "Bundled bridge" : "Development build"),
                     tone: model.isRunning && model.sdkConfigured ? .ok : (model.sdkConfigured ? .muted : .warning)
                 )
                 SettingsSummaryTile(
@@ -672,21 +676,21 @@ struct AdvancedTransportGroup: View {
             VStack(alignment: .leading, spacing: 10) {
                 TransportOverrideNotice(configured: model.sdkConfigured)
 
-                Text("These fields override the HTTP/2 bridge target used by the local harness. They only work together; changing the client version alone does not enable the bridge.")
+                Text("CursorAPI includes the SDK-compatible bridge layer. These fields only override where that layer connects; changing the client version alone does not enable a missing bridge.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
 
                 VStack(spacing: 0) {
-                    SettingsFieldRow(title: "Backend Origin", subtitle: "Required for custom transport") {
+                    SettingsFieldRow(title: "Backend Origin", subtitle: "Required for custom bridge routing") {
                         TextField("https://...", text: $model.settings.backendBaseURL)
                             .textFieldStyle(.roundedBorder)
                     }
-                    SettingsFieldRow(title: "Streaming Route", subtitle: "Required for custom transport") {
+                    SettingsFieldRow(title: "Streaming Route", subtitle: "Required for custom bridge routing") {
                         TextField("/...", text: $model.settings.localAgentEndpoint)
                             .textFieldStyle(.roundedBorder)
                     }
-                    SettingsFieldRow(title: "Client Version", subtitle: "Sent only with a complete transport") {
+                    SettingsFieldRow(title: "Client Version", subtitle: "Sent only with complete bridge routing") {
                         TextField("sdk-1.0.13", text: $model.settings.clientVersion)
                             .textFieldStyle(.roundedBorder)
                     }
@@ -705,9 +709,9 @@ struct AdvancedTransportGroup: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Advanced Transport Overrides")
+                    Text("Advanced Bridge Overrides")
                         .font(.callout.weight(.semibold))
-                    Text(model.sdkConfigured ? "Custom transport configured" : "No custom transport configured")
+                    Text(model.sdkConfigured ? "Bridge route configured" : "No bridge route configured")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -732,9 +736,9 @@ struct TransportOverrideNotice: View {
                 .background((configured ? Color.green : Color.blue).opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             VStack(alignment: .leading, spacing: 2) {
-                Text(configured ? "Custom transport configured" : "No custom transport configured")
+                Text(configured ? "Bridge route configured" : "Bridge route missing")
                     .font(.caption.weight(.semibold))
-                Text(configured ? "Save Settings restarts the local API with these overrides." : "Client Version by itself only changes a request header; it will not make the bridge work without a backend origin and streaming route.")
+                Text(configured ? "Save Settings restarts the local API with these bridge settings." : "A distributable build should bundle these defaults. Client Version by itself only changes a request header.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

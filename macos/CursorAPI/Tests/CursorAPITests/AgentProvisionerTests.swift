@@ -25,7 +25,11 @@ final class AgentProvisionerTests: XCTestCase {
         let config = home.appending(path: ".codex/config.toml")
         let text = try String(contentsOf: config, encoding: .utf8)
         XCTAssertTrue(text.contains("[model_providers.cursorapi]"))
+        XCTAssertTrue(text.contains("[model_providers.cursorapi.auth]"))
         XCTAssertTrue(text.contains("wire_api = \"responses\""))
+        XCTAssertTrue(text.contains("command = \"/bin/echo\""))
+        XCTAssertTrue(text.contains("args = [\"cursor-local\"]"))
+        XCTAssertFalse(text.contains("env_key = \"CURSOR_API_KEY\""))
         XCTAssertTrue(provisioner.status(for: .codex, settings: settings).installed)
     }
 
@@ -41,6 +45,10 @@ final class AgentProvisionerTests: XCTestCase {
         name = "Old CursorAPI"
         base_url = "http://127.0.0.1:9999/v1"
         env_key = "OLD_KEY"
+
+        [model_providers.cursorapi.auth]
+        command = "/bin/echo"
+        args = ["OLD_KEY"]
 
         [profiles.cursorapi]
         model_provider = "cursorapi"
@@ -61,14 +69,17 @@ final class AgentProvisionerTests: XCTestCase {
 
         let text = try String(contentsOf: config, encoding: .utf8)
         XCTAssertEqual(countOccurrences(of: "[model_providers.cursorapi]", in: text), 1)
+        XCTAssertEqual(countOccurrences(of: "[model_providers.cursorapi.auth]", in: text), 1)
         XCTAssertEqual(countOccurrences(of: "[profiles.cursorapi]", in: text), 1)
         XCTAssertEqual(countOccurrences(of: "[profiles.cursorapi-fast]", in: text), 1)
         XCTAssertTrue(text.contains("approval_policy = \"on-request\""))
         XCTAssertTrue(text.contains("[profiles.other]"))
         XCTAssertTrue(text.contains("base_url = \"http://127.0.0.1:8787/v1\""))
         XCTAssertTrue(text.contains("wire_api = \"responses\""))
+        XCTAssertTrue(text.contains("args = [\"cursor-local\"]"))
         XCTAssertFalse(text.contains("old-model"))
         XCTAssertFalse(text.contains("OLD_KEY"))
+        XCTAssertFalse(text.contains("env_key"))
     }
 
     func testInstallsPiModels() throws {

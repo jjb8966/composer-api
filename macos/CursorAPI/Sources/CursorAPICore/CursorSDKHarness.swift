@@ -48,7 +48,7 @@ public struct LocalCursorSDKHarness: CursorSDKHarness {
             Task {
                 do {
                     guard settings.hasCursorSDKConfiguration else {
-                        throw CursorAPIError.invalidConfiguration("CursorAPI could not find the local transport configuration. Open Settings > Advanced Transport to inspect the bridge settings.")
+                        throw CursorAPIError.invalidConfiguration("This CursorAPI build is missing its bundled Composer bridge defaults. Repackage the app with bridge defaults or inspect Settings > Advanced Bridge Overrides.")
                     }
 
                     let apiKey = cursorAPIKey(from: authorization, settings: settings)

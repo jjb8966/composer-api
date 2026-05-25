@@ -28,6 +28,17 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(settings.hasInlineCursorAPIKey)
     }
 
+    func testBridgeConfigurationDoesNotRequireAPIKey() {
+        let settings = CursorAPISettings(
+            cursorAPIKey: "",
+            backendBaseURL: "https://bridge.example",
+            localAgentEndpoint: "/sdk/run"
+        )
+
+        XCTAssertFalse(settings.hasCursorAPIKey)
+        XCTAssertTrue(settings.hasCursorSDKConfiguration)
+    }
+
     func testSettingsEncodingDoesNotPersistKeychainAvailabilityMarker() throws {
         var settings = CursorAPISettings(keychainCursorAPIKeyAvailable: true)
         settings.cursorAPIKey = ""
@@ -57,6 +68,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.backendBaseURL, "https://bundled.example")
         XCTAssertEqual(settings.localAgentEndpoint, "/sdk/run")
         XCTAssertEqual(settings.clientVersion, "sdk-test")
+        XCTAssertTrue(settings.hasCursorSDKConfiguration)
     }
 
     func testEnvironmentOverridesBundledTransportDefaults() {

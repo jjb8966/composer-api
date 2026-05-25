@@ -16,12 +16,62 @@ cp "$BUILD_DIR/CursorAPI" "$MACOS_DIR/CursorAPI"
 if [ -d "$BUILD_DIR/CursorAPI_CursorAPI.bundle" ]; then
   cp -R "$BUILD_DIR/CursorAPI_CursorAPI.bundle" "$RESOURCES_DIR/"
 fi
-swift - "$RESOURCES_DIR" <<'SWIFT'
+swift - "$RESOURCES_DIR" "$ROOT_DIR" <<'SWIFT'
 import Foundation
 
 let resourcesDirectory = URL(fileURLWithPath: CommandLine.arguments[1])
+let rootDirectory = URL(fileURLWithPath: CommandLine.arguments[2])
+let repositoryDirectory = rootDirectory.deletingLastPathComponent().deletingLastPathComponent()
 let environment = ProcessInfo.processInfo.environment
 var defaults: [String: String] = [:]
+
+func unquote(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.count >= 2,
+       let first = trimmed.first,
+       let last = trimmed.last,
+       (first == "\"" && last == "\"" || first == "'" && last == "'") {
+        return String(trimmed.dropFirst().dropLast())
+    }
+    return trimmed
+}
+
+func loadEnvironmentFile(_ url: URL) -> [String: String] {
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+        return [:]
+    }
+    var values: [String: String] = [:]
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else {
+            continue
+        }
+        let normalized = trimmed.hasPrefix("export ") ? String(trimmed.dropFirst(7)) : trimmed
+        guard let equals = normalized.firstIndex(of: "=") else {
+            continue
+        }
+        let key = normalized[..<equals].trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawValue = normalized[normalized.index(after: equals)...]
+        guard !key.isEmpty else {
+            continue
+        }
+        values[key] = unquote(String(rawValue))
+    }
+    return values
+}
+
+let localEnvironmentFiles = [
+    repositoryDirectory.appendingPathComponent(".dev.vars"),
+    repositoryDirectory.appendingPathComponent(".env.local"),
+    repositoryDirectory.appendingPathComponent(".env"),
+    rootDirectory.appendingPathComponent(".env.local")
+]
+
+var packagingValues: [String: String] = [:]
+for file in localEnvironmentFiles {
+    packagingValues.merge(loadEnvironmentFile(file)) { _, new in new }
+}
+packagingValues.merge(environment) { _, new in new }
 
 let mappings = [
     ("CURSOR_API_BASE", "cursorAPIBaseURL"),
@@ -31,7 +81,7 @@ let mappings = [
 ]
 
 for (environmentKey, plistKey) in mappings {
-    guard let value = environment[environmentKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+    guard let value = packagingValues[environmentKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
           !value.isEmpty else {
         continue
     }
@@ -44,9 +94,13 @@ if hasCompleteTransport {
     guard NSDictionary(dictionary: defaults).write(to: outputURL, atomically: true) else {
         throw NSError(domain: "CursorAPITransportDefaults", code: 1)
     }
-    print("Embedded bundled SDK transport defaults.")
+    print("Embedded bundled Composer bridge defaults.")
 } else {
-    print("No bundled SDK transport defaults found; configure transport in Settings.")
+    print("No bundled Composer bridge defaults found; this build will show Bridge Missing.")
+    let required = ["1", "true", "yes"].contains((environment["CURSOR_API_REQUIRE_BUNDLED_TRANSPORT"] ?? "").lowercased())
+    if required {
+        throw NSError(domain: "CursorAPITransportDefaults", code: 2)
+    }
 }
 SWIFT
 mkdir -p "$ICONSET_DIR"

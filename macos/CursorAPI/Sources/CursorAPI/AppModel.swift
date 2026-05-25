@@ -54,11 +54,11 @@ final class CursorAPIAppModel: ObservableObject {
     }
 
     var sdkStatusText: String {
+        if !sdkConfigured {
+            return "Bridge Missing"
+        }
         if !hasCursorAPIKey {
             return "Needs API Key"
-        }
-        if !sdkConfigured {
-            return "Setup Needed"
         }
         return "Ready"
     }
@@ -76,7 +76,7 @@ final class CursorAPIAppModel: ObservableObject {
         }
         guard sdkConfigured else {
             isRunning = false
-            statusText = "Configure SDK transport to use Composer"
+            statusText = "This build is missing Composer bridge defaults"
             lastError = nil
             return
         }
@@ -181,7 +181,7 @@ final class CursorAPIAppModel: ObservableObject {
 
     func checkSDKConnectivity() {
         guard canCheckSDK else {
-            sdkCheckState = .failure(sdkConfigured ? "Enter a Cursor API key before checking SDK connectivity." : "Configure SDK transport before checking connectivity.")
+            sdkCheckState = .failure(sdkConfigured ? "Enter a Cursor API key before checking Composer." : "This build is missing Composer bridge defaults.")
             return
         }
         isCheckingSDK = true
@@ -194,7 +194,7 @@ final class CursorAPIAppModel: ObservableObject {
                 settings.keychainCursorAPIKeyAvailable = true
                 needsKeychainPermission = false
                 _ = try await connectivityCheck.run(settings: resolved)
-                sdkCheckState = .success("SDK transport responded.")
+                sdkCheckState = .success("Composer bridge responded.")
                 lastError = nil
             } catch AppSettingsStoreError.keychainPermissionRequired {
                 needsKeychainPermission = true
@@ -209,13 +209,13 @@ final class CursorAPIAppModel: ObservableObject {
 
     private func updateStatusText() {
         if isRunning {
-            statusText = sdkConfigured ? "Listening on \(baseURL)" : "Listening on \(baseURL); SDK transport setup needed"
+            statusText = sdkConfigured ? "Listening on \(baseURL)" : "Listening on \(baseURL); bridge defaults missing"
         } else if needsKeychainPermission {
             statusText = "Click Start to allow CursorAPI to read the saved key from Keychain"
         } else if !hasCursorAPIKey {
             statusText = "Enter a Cursor API key to start the local API"
         } else if !sdkConfigured {
-            statusText = "Configure SDK transport to use Composer"
+            statusText = "This build is missing Composer bridge defaults"
         } else {
             statusText = "Ready to start local API"
         }

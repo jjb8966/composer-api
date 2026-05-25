@@ -105,8 +105,12 @@ public final class AgentProvisioner: @unchecked Sendable {
         [model_providers.cursorapi]
         name = "CursorAPI"
         base_url = "\(settings.baseURL.absoluteString)"
-        env_key = "CURSOR_API_KEY"
         wire_api = "responses"
+
+        [model_providers.cursorapi.auth]
+        command = "/bin/echo"
+        args = ["cursor-local"]
+        refresh_interval_ms = 300000
 
         [profiles.cursorapi]
         model_provider = "cursorapi"
@@ -116,6 +120,7 @@ public final class AgentProvisioner: @unchecked Sendable {
         model_provider = "cursorapi"
         model = "composer-2.5-fast"
         """
+        text = replaceTOMLBlock(named: "model_providers.cursorapi.auth", in: text, replacement: "")
         text = replaceTOMLBlock(named: "model_providers.cursorapi", in: text, replacement: "")
         text = replaceTOMLBlock(named: "profiles.cursorapi", in: text, replacement: "")
         text = replaceTOMLBlock(named: "profiles.cursorapi-fast", in: text, replacement: "")
