@@ -1,11 +1,16 @@
 export interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  CURSOR_SDK_BRIDGE_CONTAINER?: DurableObjectNamespace;
   ENCRYPTION_KEY?: string;
   CURSOR_API_BASE?: string;
   CURSOR_BACKEND_BASE_URL?: string;
   CURSOR_CHAT_ENDPOINT?: string;
   CURSOR_CLIENT_VERSION?: string;
+  CURSOR_LOCAL_AGENT_ENDPOINT?: string;
+  CURSOR_SDK_BRIDGE_TOKEN?: string;
+  CURSOR_SDK_BRIDGE_URL?: string;
+  CURSOR_SDK_CLIENT_VERSION?: string;
   WAITLIST_API_TOKEN?: string;
   WAITLIST_SOURCE?: string;
 }

@@ -595,6 +595,33 @@ code {
   height: auto;
 }
 
+.md-details {
+  margin: 18px 0 22px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.md-details summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 680;
+}
+
+.md-details summary::marker {
+  color: var(--cyan);
+}
+
+.md-details > :last-child {
+  margin-bottom: 0;
+}
+
+.md-details[open] summary {
+  margin-bottom: 12px;
+}
+
 .icon-button {
   display: inline-flex;
   align-items: center;

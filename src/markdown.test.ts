@@ -26,6 +26,14 @@ describe("markdown renderer", () => {
     expect(result.html).toContain('alt="Composer 2.5 in OpenCode"');
   });
 
+  it("renders collapsible details blocks with escaped summaries", () => {
+    const result = renderMarkdown(["::: details Old <route>", "", "Use `v1`.", "", ":::"].join("\n"));
+
+    expect(result.html).toContain('<details class="md-details">');
+    expect(result.html).toContain("<summary>Old &lt;route&gt;</summary>");
+    expect(result.html).toContain("Use <code>v1</code>.");
+  });
+
   it("renders tabbed code samples and relative links", () => {
     const result = renderMarkdown(
       [

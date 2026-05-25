@@ -31,6 +31,8 @@ export function renderMarkdown(markdown: string, options: MarkdownOptions = {}):
   let codeLang = "";
   let codeLines: string[] | null = null;
   let codeTabs: CodeSample[] | null = null;
+  let detailsSummary = "";
+  let detailsLines: string[] | null = null;
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -64,8 +66,25 @@ export function renderMarkdown(markdown: string, options: MarkdownOptions = {}):
     codeTabs = null;
   };
 
+  const flushDetails = () => {
+    if (!detailsLines) return;
+    const rendered = renderMarkdown(detailsLines.join("\n"), { ...options, headingIds: false });
+    html.push(`<details class="md-details"><summary>${renderInline(detailsSummary)}</summary>${rendered.html}</details>`);
+    detailsSummary = "";
+    detailsLines = null;
+  };
+
   for (const line of lines) {
     const fence = /^```(\S*)\s*$/.exec(line);
+    if (detailsLines) {
+      if (line.trim() === ":::") {
+        flushDetails();
+        continue;
+      }
+      detailsLines.push(line);
+      continue;
+    }
+
     if (codeTabs) {
       if (fence) {
         if (codeLines) {
@@ -97,6 +116,15 @@ export function renderMarkdown(markdown: string, options: MarkdownOptions = {}):
         codeLang = fence[1] || "text";
         codeLines = [];
       }
+      continue;
+    }
+
+    const details = /^:::\s*details\s+(.+)$/.exec(line.trim());
+    if (details) {
+      flushParagraph();
+      flushList();
+      detailsSummary = details[1];
+      detailsLines = [];
       continue;
     }
 
@@ -157,6 +185,7 @@ export function renderMarkdown(markdown: string, options: MarkdownOptions = {}):
 
   flushCode();
   flushTabbedCode();
+  flushDetails();
   flushParagraph();
   flushList();
   return { html: html.join("\n"), headings };

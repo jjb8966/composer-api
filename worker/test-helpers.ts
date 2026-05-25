@@ -4,6 +4,7 @@ export class FakeD1 {
   accounts = new Map<string, AccountRow>();
   apiKeys = new Map<string, ApiKeyRow>();
   requestLogs = new Map<string, Record<string, unknown>>();
+  sdkSessions = new Map<string, Record<string, unknown>>();
 
   prepare(sql: string) {
     return new FakeStatement(this, sql);
@@ -81,6 +82,20 @@ class FakeStatement {
         row.error = error;
         row.completed_at = completedAt;
       }
+    } else if (normalized.startsWith("INSERT INTO sdk_sessions")) {
+      const [id, ownerHash, sessionHash, agentId, createdAt, updatedAt] = this.values;
+      const existing = this.db.sdkSessions.get(String(id));
+      this.db.sdkSessions.set(String(id), {
+        id,
+        owner_hash: ownerHash,
+        session_hash: sessionHash,
+        agent_id: agentId,
+        created_at: existing?.created_at || createdAt,
+        updated_at: updatedAt
+      });
+    } else if (normalized.startsWith("DELETE FROM sdk_sessions")) {
+      const [id] = this.values;
+      this.db.sdkSessions.delete(String(id));
     }
     return { success: true };
   }
@@ -94,6 +109,10 @@ class FakeStatement {
     if (normalized.startsWith("SELECT * FROM accounts WHERE id")) {
       const [id] = this.values;
       return (this.db.accounts.get(String(id)) || null) as T | null;
+    }
+    if (normalized.startsWith("SELECT agent_id, updated_at FROM sdk_sessions")) {
+      const [id] = this.values;
+      return (this.db.sdkSessions.get(String(id)) || null) as T | null;
     }
     return null;
   }

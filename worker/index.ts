@@ -1,4 +1,5 @@
 import { collectCursorOutput, createCursorCompletion, resolveCursorModel, streamCursorText, verifyCursorApiKey } from "./cursor";
+import { collectCursorSdkOutput, createCursorSdkCompletion } from "./cursor-sdk";
 import { authenticateProxyKey, completeRequestLog, createRequestLog, saveSignup } from "./db";
 import { bearerToken, errorResponse, HttpError, json, notFound, openAiError, optionsResponse, parseJsonBody, sseResponse, unauthorized, withCors } from "./http";
 import {
@@ -9,6 +10,7 @@ import {
   doneChunk,
   modelList,
   prepareChatRequest,
+  prepareOpencodeSdkChatRequest,
   prepareResponsesRequest,
   responseCreatedEvents,
   responseDeltaEvent,
@@ -19,7 +21,10 @@ import {
 import { submitWaitlist } from "./waitlist";
 import { encodeSse } from "./sse";
 import type { Deps, Env } from "./types";
+import type { CursorTextEvent } from "./cursor";
 import type { OpenAiToolSpec } from "./openai";
+
+export { CursorSdkBridgeContainer } from "./sdk-bridge-container";
 
 /**
  * The two ways a `/v1/...` request can be authenticated:
@@ -180,7 +185,7 @@ async function handleOpenAiRoute(
     const auth = await authenticate(request, env, route);
     if (!auth) return unauthorized();
     if (request.method !== "GET") return notFound();
-    return json(modelList({ opencode: route.surface === "opencode" }));
+    return json(modelList({ opencode: route.surface === "opencode" || route.surface === "opencodev2", sdk: route.surface === "opencodev2" }));
   }
 
   if (request.method !== "POST") return notFound();
@@ -190,6 +195,10 @@ async function handleOpenAiRoute(
   const body = await parseJsonBody<unknown>(request);
   const requestedModel = typeof (body as { model?: unknown })?.model === "string" ? (body as { model: string }).model : "composer-2.5";
   const cursorModel = resolveCursorModel(requestedModel);
+  if (route.surface === "opencodev2" && route.kind === "chat") {
+    return handleOpenCodeSdkChatRoute(request, env, ctx, deps, auth, body, cursorModel);
+  }
+
   const prepared =
     route.kind === "chat"
       ? prepareChatRequest(body, cursorModel, { forceAgentMode: route.surface === "opencode" })
@@ -284,9 +293,120 @@ async function handleOpenAiRoute(
   }
 }
 
+async function handleOpenCodeSdkChatRoute(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  deps: Deps,
+  auth: AuthResult,
+  body: unknown,
+  cursorModel: { id: string } | undefined
+): Promise<Response> {
+  const prepared = prepareOpencodeSdkChatRequest(body, cursorModel);
+  const id = `chatcmpl_${crypto.randomUUID().replaceAll("-", "")}`;
+  const created = Math.floor(deps.now().getTime() / 1000);
+  const logId =
+    auth.mode === "proxy"
+      ? await createRequestLog(env, {
+          accountId: auth.accountId,
+          endpoint: "chat",
+          model: prepared.model,
+          status: "running",
+          promptChars: prepared.promptChars
+        })
+      : null;
+  const finishLog = (input: Parameters<typeof completeRequestLog>[2]): Promise<void> =>
+    logId ? completeRequestLog(env, logId, input) : Promise.resolve();
+
+  try {
+    const completion = await createCursorSdkCompletion(env, deps, auth.cursorApiKey, {
+      prompt: prepared.prompt,
+      model: prepared.cursorModel,
+      sessionKey: sessionAffinity(request),
+      sessionOwnerKey: sdkSessionOwner(auth)
+    });
+
+    if (prepared.stream) {
+      return streamOpenAiEvents("chat", completion.stream, {
+        id,
+        created,
+        model: prepared.model,
+        promptChars: prepared.promptChars,
+        includeUsage: prepared.includeUsage,
+        metadata: prepared.responseMetadata,
+        tools: prepared.tools,
+        onDone: (_text, completionChars) =>
+          finishLog({
+            status: "completed",
+            completionChars,
+            cursorAgentId: completion.agentId,
+            cursorRunId: completion.runId
+          }),
+        onError: (error) =>
+          finishLog({
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
+            cursorAgentId: completion.agentId,
+            cursorRunId: completion.runId
+          })
+      }, ctx);
+    }
+
+    const output = await collectCursorSdkOutput(completion.stream);
+    const toolCalls = toOpenAiToolCalls({
+      toolCalls: output.toolCalls,
+      tools: prepared.tools,
+      responseId: id
+    });
+    const completionChars = completionCharsFromOutput(output.text, toolCalls);
+    await finishLog({
+      status: "completed",
+      completionChars,
+      cursorAgentId: completion.agentId,
+      cursorRunId: completion.runId
+    });
+    return json(
+      chatCompletionResponse({
+        id,
+        created,
+        model: prepared.model,
+        text: output.text,
+        toolCalls,
+        promptChars: prepared.promptChars,
+        metadata: prepared.responseMetadata
+      })
+    );
+  } catch (error) {
+    await finishLog({
+      status: "error",
+      error: error instanceof Error ? error.message : String(error)
+    }).catch(() => undefined);
+    throw error;
+  }
+}
+
 function streamOpenAiResponse(
   kind: "chat" | "responses",
   cursorStream: Response,
+  input: {
+    id: string;
+    created: number;
+    model: string;
+    promptChars: number;
+    includeUsage: boolean;
+    metadata?: Record<string, unknown>;
+    tools: OpenAiToolSpec[];
+    onDone: (text: string, completionChars: number) => Promise<void>;
+    onError: (error: unknown) => Promise<void>;
+  },
+  ctx: ExecutionContext
+): Response {
+  return streamOpenAiEvents(kind, streamCursorText(cursorStream), input, ctx);
+}
+
+function streamOpenAiEvents(
+  kind: "chat" | "responses",
+  cursorEvents: AsyncIterable<CursorTextEvent>,
   input: {
     id: string;
     created: number;
@@ -314,7 +434,7 @@ function streamOpenAiResponse(
         for (const event of responseCreatedEvents(input)) await writer.write(event);
       }
 
-      for await (const event of streamCursorText(cursorStream)) {
+      for await (const event of cursorEvents) {
         if (event.type === "text" && event.text) {
           text += event.text;
           if (kind === "chat") await writer.write(chatChunk({ id: input.id, created: input.created, model: input.model, delta: event.text }));
@@ -378,6 +498,10 @@ function sessionAffinity(request: Request): string | undefined {
   )?.trim() || undefined;
 }
 
+function sdkSessionOwner(auth: AuthResult): string | undefined {
+  return auth.mode === "proxy" ? `account:${auth.accountId}` : undefined;
+}
+
 async function authenticate(request: Request, env: Env, route: OpenAiRoute): Promise<AuthResult | null> {
   const token = bearerToken(request);
   if (!token) return null;
@@ -404,13 +528,16 @@ async function authenticate(request: Request, env: Env, route: OpenAiRoute): Pro
 interface OpenAiRoute {
   kind: "chat" | "responses" | "models";
   accountId?: string;
-  surface?: "standard" | "opencode";
+  surface?: "standard" | "opencode" | "opencodev2";
 }
 
 function matchOpenAiRoute(pathname: string): OpenAiRoute | null {
   const opencodePath = pathname.startsWith("/opencode/v1/") ? pathname.slice("/opencode/v1".length) : "";
   if (opencodePath === "/chat/completions") return { kind: "chat", surface: "opencode" };
   if (opencodePath === "/models") return { kind: "models", surface: "opencode" };
+  const opencodeV2Path = pathname.startsWith("/opencodev2/v1/") ? pathname.slice("/opencodev2/v1".length) : "";
+  if (opencodeV2Path === "/chat/completions") return { kind: "chat", surface: "opencodev2" };
+  if (opencodeV2Path === "/models") return { kind: "models", surface: "opencodev2" };
 
   const accountMatch = /^\/u\/([^/]+)\/v1\/(.+)$/.exec(pathname);
   const accountId = accountMatch?.[1];

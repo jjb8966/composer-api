@@ -10,8 +10,9 @@ Cursor does not expose Composer 2.5 as a raw OpenAI-compatible model endpoint. T
 
 - `POST /auth/exchange_user_api_key`
 - a private Cursor chat endpoint configured with `CURSOR_CHAT_ENDPOINT`
+- a private Cursor local SDK endpoint configured with `CURSOR_LOCAL_AGENT_ENDPOINT`
 
-Each generic `/v1` request is stateless from the caller's perspective: the Worker creates a fresh request/conversation id, sends the full prompt, streams text back, and does not create a Cursor Cloud Agent. The `/opencode/v1` route keeps the internal conversation id stable for OpenCode's session-affinity header while OpenCode still owns the local tool loop and resends the message/tool history. Chat Completions requests that include tools are sent in Composer Agent mode, and Composer tool-call markers are translated back into OpenAI-compatible `tool_calls`.
+Each generic `/v1` request is stateless from the caller's perspective: the Worker creates a fresh request/conversation id, sends the full prompt, streams text back, and does not create a hosted agent. The recommended OpenCode route is `/opencodev2/v1`: it uses a small SDK-compatible local-agent harness, so OpenCode owns the local filesystem and shell tool loop while SDK tool-call events are translated back into OpenAI-compatible `tool_calls`. The legacy `/opencode/v1` route remains available for the older Cursor chat-endpoint behavior.
 
 ## Supported endpoints
 
@@ -95,10 +96,41 @@ Token usage is estimated from character counts because Cursor's stream does not 
 
 ![Composer 2.5 in OpenCode](public/opencode-composer-2-5.webp)
 
-OpenCode should use the hosted OpenCode route, not the generic `/v1` route. The
-OpenCode route keeps tool execution local to OpenCode: the Worker translates
-Cursor tool-call output into OpenAI-compatible `tool_calls`, then OpenCode runs
-the file and shell tools in your project.
+OpenCode should use a hosted OpenCode route, not the generic `/v1` route. The
+main OpenCode integration is the SDK-compatible local-agent harness at
+`/opencodev2/v1`. It does not create Cursor cloud agents; it mirrors the SDK's
+local-agent protocol and forwards local filesystem and shell execution back to
+OpenCode.
+
+Base URL:
+
+```txt
+https://cursor-api.standardagents.ai/opencodev2/v1
+```
+
+OpenCode uses these endpoints:
+
+- `GET /opencodev2/v1/models`
+- `POST /opencodev2/v1/chat/completions`
+
+Configure OpenCode with `@ai-sdk/openai-compatible` and select
+`cursorsdk/composer-2.5-sdk`, displayed as **Composer 2.5 SDK Harness**.
+
+For session affinity, the Worker stores only hashed owner/session keys and the
+local SDK agent id; it does not store the caller's Cursor API key. Cloudflare
+Workers do not currently provide a functional `node:http2` client, so production
+SDK runs use a tiny Node bridge in `scripts/cursor-sdk-opencode-bridge.mjs`. In
+the deployed Worker this runs as a shared Cloudflare Container behind the
+`CURSOR_SDK_BRIDGE_CONTAINER` Durable Object binding. The bridge only owns the
+HTTP/2 transport and does not execute local filesystem tools.
+
+<details>
+<summary>Use the old /opencode/v1 route</summary>
+
+The old `/opencode/v1` route keeps the previous Cursor chat-endpoint behavior:
+the Worker forces Agent mode, keeps the conversation id stable for OpenCode's
+session-affinity header, and translates Cursor tool-call output into
+OpenAI-compatible `tool_calls`.
 
 Base URL:
 
@@ -106,13 +138,14 @@ Base URL:
 https://cursor-api.standardagents.ai/opencode/v1
 ```
 
-OpenCode uses these endpoints:
+Old-route endpoints:
 
 - `GET /opencode/v1/models`
 - `POST /opencode/v1/chat/completions`
 
-Configure the provider with `@ai-sdk/openai-compatible` and select
-`cursor/composer-2.5`, displayed as **Composer 2.5**.
+Select `cursor/composer-2.5`, displayed as **Composer 2.5**.
+
+</details>
 
 ## Local development
 
@@ -129,12 +162,25 @@ ENCRYPTION_KEY="replace-with-a-long-random-secret"
 WAITLIST_API_TOKEN="optional-standard-agents-waitlist-token"
 CURSOR_BACKEND_BASE_URL="private-cursor-backend-origin"
 CURSOR_CHAT_ENDPOINT="private-cursor-chat-endpoint"
+CURSOR_LOCAL_AGENT_ENDPOINT="private-cursor-local-sdk-agent-endpoint"
+CURSOR_SDK_BRIDGE_URL="optional-external-node-sdk-bridge-url"
+CURSOR_SDK_BRIDGE_TOKEN="optional-external-shared-bridge-token"
 CURSOR_CLIENT_VERSION="2.6.22"
+CURSOR_SDK_CLIENT_VERSION="sdk-1.0.13"
+```
+
+Run the optional SDK HTTP/2 bridge in a local Node environment:
+
+```bash
+npm run sdk:opencode-bridge
 ```
 
 ## Cloudflare
 
 The Worker uses Cloudflare Vite and D1.
+
+Remote migration and deploy commands require a valid `CLOUDFLARE_API_TOKEN` in
+the shell environment.
 
 ```bash
 npm run build
@@ -150,6 +196,23 @@ Required secrets:
 wrangler secret put ENCRYPTION_KEY
 wrangler secret put CURSOR_BACKEND_BASE_URL
 wrangler secret put CURSOR_CHAT_ENDPOINT
+wrangler secret put CURSOR_LOCAL_AGENT_ENDPOINT
+```
+
+The OpenCode SDK harness also requires the `0002_sdk_sessions.sql` migration so
+local SDK agent ids can be resumed across Worker isolates.
+
+The Cloudflare deployment uses the container-backed bridge by default. Do not set
+`CURSOR_SDK_BRIDGE_URL` for that path. Only set it when intentionally routing the
+SDK harness to an external Node bridge instead of the
+`CURSOR_SDK_BRIDGE_CONTAINER` Durable Object binding.
+
+Optional SDK harness overrides:
+
+```bash
+wrangler secret put CURSOR_SDK_CLIENT_VERSION
+wrangler secret put CURSOR_SDK_BRIDGE_URL
+wrangler secret put CURSOR_SDK_BRIDGE_TOKEN
 ```
 
 Optional secret for direct waitlist writes. If omitted, the Worker falls back to the deployed token-cost early-access endpoint.
@@ -166,3 +229,5 @@ wrangler secret put WAITLIST_API_TOKEN
 - OpenAI Chat Completions reference: https://developers.openai.com/api/docs/api-reference/chat
 - OpenAI Responses reference: https://developers.openai.com/api/docs/api-reference/responses
 - OpenAI migration guide: https://developers.openai.com/api/docs/guides/migrate-to-responses
+- Cloudflare Containers getting started: https://developers.cloudflare.com/containers/get-started/
+- Cloudflare Containers container class: https://developers.cloudflare.com/containers/container-class/

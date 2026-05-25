@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { prepareChatRequest, prepareResponsesRequest, chatCompletionResponse, chatUsageChunk, responseObject, toOpenAiToolCalls } from "./openai";
+import {
+  prepareChatRequest,
+  prepareOpencodeSdkChatRequest,
+  prepareResponsesRequest,
+  chatCompletionResponse,
+  chatUsageChunk,
+  responseObject,
+  toOpenAiToolCalls
+} from "./openai";
 
 describe("OpenAI compatibility adapter", () => {
   it("converts chat messages and image URLs into Cursor prompts", () => {
@@ -144,6 +152,79 @@ describe("OpenAI compatibility adapter", () => {
 
     expect(prepared.prompt.text).toContain("A file-mutating tool call has already been made");
     expect(prepared.prompt.text).not.toContain("Your next assistant response must be a write/edit/bash tool call");
+  });
+
+  it("keeps SDK workspace mutation required after non-mutating shell probes", () => {
+    const prepared = prepareOpencodeSdkChatRequest(
+      {
+        model: "composer-2.5-sdk",
+        messages: [
+          { role: "user", content: "build a complete TypeScript CLI project" },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [{ id: "call_ls", type: "function", function: { name: "bash", arguments: "{\"command\":\"pwd && ls -la\"}" } }]
+          },
+          { role: "tool", tool_call_id: "call_ls", name: "bash", content: "{\"exitCode\":0,\"stdout\":\"empty\",\"stderr\":\"\"}" }
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "bash",
+              description: "Run a shell command",
+              parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] }
+            }
+          }
+        ]
+      },
+      { id: "composer-2.5-sdk" }
+    );
+
+    expect(prepared.prompt.text).toContain("SDK WORKSPACE MUTATION REQUIRED:");
+    expect(prepared.prompt.text).toContain("When starting a dev server or other long-running watcher");
+    expect(prepared.prompt.text).toContain("No file-mutating tool call has been made yet");
+    expect(prepared.prompt.text).not.toContain("A file-mutating tool call has already been made");
+  });
+
+  it("marks SDK workspace mutation done after a file-writing shell command", () => {
+    const prepared = prepareOpencodeSdkChatRequest(
+      {
+        model: "composer-2.5-sdk",
+        messages: [
+          { role: "user", content: "build a complete TypeScript CLI project" },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_write",
+                type: "function",
+                function: {
+                  name: "bash",
+                  arguments: "{\"command\":\"cat > package.json <<'EOF'\\n{\\\"type\\\":\\\"module\\\"}\\nEOF\"}"
+                }
+              }
+            ]
+          },
+          { role: "tool", tool_call_id: "call_write", name: "bash", content: "{\"exitCode\":0,\"stdout\":\"\",\"stderr\":\"\"}" }
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "bash",
+              description: "Run a shell command",
+              parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] }
+            }
+          }
+        ]
+      },
+      { id: "composer-2.5-sdk" }
+    );
+
+    expect(prepared.prompt.text).toContain("A file-mutating tool call has already been made");
+    expect(prepared.prompt.text).not.toContain("No file-mutating tool call has been made yet");
   });
 
   it("converts Responses input arrays", () => {
@@ -304,6 +385,63 @@ describe("OpenAI compatibility adapter", () => {
     ]);
   });
 
+  it("drops synthetic SDK shell workdirs so OpenCode uses its local cwd", () => {
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "bash",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: { command: { type: "string" }, workdir: { type: "string" } },
+            required: ["command"]
+          }
+        }
+      ],
+      toolCalls: [{ name: "shell", arguments: { command: "npm install && npm test", workingDirectory: "/workspace" } }]
+    });
+
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ command: "npm install && npm test" });
+  });
+
+  it("backgrounds SDK server shell calls so OpenCode is not blocked", () => {
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "bash",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              command: { type: "string" },
+              workdir: { type: "string" },
+              description: { type: "string" }
+            },
+            required: ["command", "description"]
+          }
+        }
+      ],
+      toolCalls: [
+        {
+          name: "shell",
+          arguments: {
+            command: "python3 -m http.server 8080",
+            workingDirectory: "/Users/example/site"
+          }
+        }
+      ]
+    });
+
+    const args = JSON.parse(toolCalls[0].function.arguments) as Record<string, string>;
+    expect(args.command).toContain("nohup sh -lc 'python3 -m http.server 8080'");
+    expect(args.command).toMatch(/\/tmp\/opencode-background-[0-9a-f]{8}\.log/);
+    expect(args.command).toContain("& echo \"Started background process pid=$!");
+    expect(args.workdir).toBe("/Users/example/site");
+    expect(args.description).toBe("Starts background process: Runs python3 -m http.server 8080");
+  });
+
   it("prefers glob patterns over Cursor targeting when both are emitted", () => {
     const toolCalls = toOpenAiToolCalls({
       responseId: "chatcmpl_test",
@@ -322,5 +460,25 @@ describe("OpenAI compatibility adapter", () => {
     });
 
     expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: "*.ts" });
+  });
+
+  it("defaults empty SDK glob calls to a valid OpenCode workspace glob", () => {
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "glob",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: { pattern: { type: "string" } },
+            required: ["pattern"]
+          }
+        }
+      ],
+      toolCalls: [{ name: "glob", arguments: {} }]
+    });
+
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: "*" });
   });
 });

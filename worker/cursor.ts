@@ -37,7 +37,7 @@ export async function listCursorModels(env: Env, deps: Deps, apiKey: string): Pr
 export function resolveCursorModel(model: unknown): { id: string } | undefined {
   if (typeof model !== "string" || !model.trim()) return { id: "composer-2.5" };
   const normalized = model.trim().toLowerCase();
-  if (normalized === "composer-2.5" || normalized === "composer-2-5" || normalized === "composer-latest") {
+  if (normalized === "composer-2.5" || normalized === "composer-2-5" || normalized === "composer-2.5-sdk" || normalized === "composer-latest") {
     return { id: "composer-2.5" };
   }
   if (normalized === "composer-2.5-fast" || normalized === "composer-2-5-fast") {
@@ -263,7 +263,7 @@ export async function collectCursorText(response: Response): Promise<string> {
   return (await collectCursorOutput(response)).text;
 }
 
-async function exchangeCursorApiKey(env: Env, deps: Deps, apiKey: string): Promise<string> {
+export async function exchangeCursorApiKey(env: Env, deps: Deps, apiKey: string): Promise<string> {
   const response = await cursorInternalRaw(env, deps, apiKey, "/auth/exchange_user_api_key", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

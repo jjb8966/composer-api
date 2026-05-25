@@ -130,38 +130,38 @@ print(response.output_text)
 
 ![Composer 2.5 in OpenCode](/opencode-composer-2-5.webp)
 
-OpenCode should use the hosted OpenCode route, not the generic `/v1` route. The OpenCode route is still a normal OpenAI-compatible Chat Completions API, but it preserves OpenCode's local tool loop: the proxy turns Cursor tool-call output into `tool_calls`, and OpenCode executes those tools in your project.
+OpenCode should use a hosted OpenCode route, not the generic `/v1` route. The recommended route is the SDK-compatible local-agent harness at `/opencodev2/v1`. It does not create Cursor cloud agents; it mirrors the SDK's local-agent protocol and forwards local filesystem and shell execution back to OpenCode.
 
 Streaming requests return the final OpenAI-style usage chunk when OpenCode asks for usage. Token counts are estimated from the prompt and output text, and the displayed cost uses Cursor's published Composer 2.5 standard rate.
 
 The OpenCode base URL is:
 
 ```txt
-https://cursor-api.standardagents.ai/opencode/v1
+https://cursor-api.standardagents.ai/opencodev2/v1
 ```
 
 OpenCode will use these endpoints:
 
-- `GET /opencode/v1/models`
-- `POST /opencode/v1/chat/completions`
+- `GET /opencodev2/v1/models`
+- `POST /opencodev2/v1/chat/completions`
 
 Add a custom provider to `~/.config/opencode/opencode.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "cursor/composer-2.5",
+  "model": "cursorsdk/composer-2.5-sdk",
   "provider": {
-    "cursor": {
+    "cursorsdk": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Cursor API via Standard Agents",
+      "name": "Cursor SDK Bridge",
       "options": {
-        "baseURL": "https://cursor-api.standardagents.ai/opencode/v1",
+        "baseURL": "https://cursor-api.standardagents.ai/opencodev2/v1",
         "apiKey": "{env:CURSOR_API_KEY}"
       },
       "models": {
-        "composer-2.5": {
-          "name": "Composer 2.5",
+        "composer-2.5-sdk": {
+          "name": "Composer 2.5 SDK Harness",
           "cost": {
             "input": 0.5,
             "output": 2.5
@@ -184,7 +184,26 @@ export CURSOR_API_KEY="crsr_..."
 opencode
 ```
 
-If you do not set `model`, run `/models` inside OpenCode and choose `cursor/composer-2.5`, displayed as **Composer 2.5**.
+Choose `cursorsdk/composer-2.5-sdk`, displayed as **Composer 2.5 SDK Harness**.
+
+::: details Use the old v1 OpenCode route
+
+The old `/opencode/v1` route keeps the previous Cursor chat-endpoint behavior: the proxy forces Agent mode, keeps the conversation id stable for OpenCode's session-affinity header, and translates Cursor tool-call output into OpenAI-compatible `tool_calls`.
+
+Old route base URL:
+
+```txt
+https://cursor-api.standardagents.ai/opencode/v1
+```
+
+Old route endpoints:
+
+- `GET /opencode/v1/models`
+- `POST /opencode/v1/chat/completions`
+
+To use it, point your provider at `/opencode/v1` and choose `cursor/composer-2.5`, displayed as **Composer 2.5**.
+
+:::
 
 ## cURL
 
