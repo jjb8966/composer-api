@@ -230,6 +230,16 @@ public final class LocalAPIServer: @unchecked Sendable {
                 }
                 return .response(withCORS(HTTPResponse.data(data, contentType: "application/json; charset=utf-8")))
             }
+            if request.method == "DELETE", let responseID = responseID(from: path) {
+                guard await responseSessions.deleteResponse(responseID: responseID) else {
+                    throw CursorAPIError.notFound
+                }
+                return try .response(withCORS(HTTPResponse.json([
+                    "id": responseID,
+                    "object": "response",
+                    "deleted": true
+                ])))
+            }
             if request.method == "GET", let responseID = responseID(from: path) {
                 guard let data = await responseSessions.responseData(responseID: responseID) else {
                     throw CursorAPIError.notFound
@@ -542,7 +552,7 @@ public final class LocalAPIServer: @unchecked Sendable {
         [
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Authorization, Content-Type, OpenAI-Beta, OpenAI-Organization, OpenAI-Project, X-Session-Affinity, X-OpenCode-Session-Id, X-OpenCode-Session, X-CursorAPI-Session, X-CursorAPI-Project, X-Project-Path, X-Workspace-Path, X-Working-Directory",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS"
         ]
     }
 
@@ -625,6 +635,7 @@ public final class LocalAPIServer: @unchecked Sendable {
                 "models": "/v1/models",
                 "chat_completions": "/v1/chat/completions",
                 "responses": "/v1/responses",
+                "delete_response": "DELETE /v1/responses/{response_id}",
                 "completions": "/v1/completions",
                 "health": "/health"
             ],
@@ -632,6 +643,7 @@ public final class LocalAPIServer: @unchecked Sendable {
                 "chat_completions": true,
                 "responses": true,
                 "stateful_responses": true,
+                "response_deletion": true,
                 "streaming": true,
                 "tool_calls": true
             ]
@@ -760,6 +772,19 @@ private actor LocalResponseSessionStore {
         guard let toolCalls = storedResponseToolCalls[responseID] else { return [:] }
         touch(responseID)
         return toolCalls
+    }
+
+    func deleteResponse(responseID: String) -> Bool {
+        let existed = responseSessions[responseID] != nil
+            || storedResponses[responseID] != nil
+            || storedResponseInputItems[responseID] != nil
+            || storedResponseToolCalls[responseID] != nil
+        responseSessions.removeValue(forKey: responseID)
+        storedResponses.removeValue(forKey: responseID)
+        storedResponseInputItems.removeValue(forKey: responseID)
+        storedResponseToolCalls.removeValue(forKey: responseID)
+        responseOrder.removeAll { $0 == responseID }
+        return existed
     }
 
     func stats() -> Stats {

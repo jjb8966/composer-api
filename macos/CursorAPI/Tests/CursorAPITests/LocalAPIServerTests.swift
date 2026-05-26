@@ -151,7 +151,9 @@ final class LocalAPIServerTests: XCTestCase {
             XCTAssertEqual(endpoints["models"], "/v1/models", path)
             XCTAssertEqual(endpoints["chat_completions"], "/v1/chat/completions", path)
             XCTAssertEqual(endpoints["responses"], "/v1/responses", path)
+            XCTAssertEqual(endpoints["delete_response"], "DELETE /v1/responses/{response_id}", path)
             XCTAssertEqual(features["stateful_responses"], true, path)
+            XCTAssertEqual(features["response_deletion"], true, path)
             XCTAssertEqual(features["tool_calls"], true, path)
             XCTAssertFalse(text.contains("crsr_test"), path)
             XCTAssertFalse(text.contains("exchange.example"), path)
@@ -600,6 +602,62 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertNil(retrieved?["id"])
         XCTAssertEqual(inputItemsStatus, 404)
         XCTAssertNil(inputItems?["data"])
+    }
+
+    func testResponsesDeleteRemovesStoredResponseState() async throws {
+        let port = try unusedTCPPort()
+        let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness())
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let created = try await postResponse(port: port, body: #"{"model":"composer-2.5","input":"hello"}"#)
+        let responseID = try XCTUnwrap(created["id"] as? String)
+        let (statusBeforeDelete, _) = try await getResponse(port: port, responseID: responseID)
+        let (itemsStatusBeforeDelete, _) = try await getResponseInputItems(port: port, responseID: responseID)
+
+        var deleteRequest = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/responses/\(responseID)")!)
+        deleteRequest.httpMethod = "DELETE"
+        let (deleteData, deleteResponse) = try await URLSession.shared.data(for: deleteRequest)
+        let deleteObject = try XCTUnwrap(JSONSerialization.jsonObject(with: deleteData) as? [String: Any])
+
+        let (statusAfterDelete, retrievedAfterDelete) = try await getResponse(port: port, responseID: responseID)
+        let (itemsStatusAfterDelete, itemsAfterDelete) = try await getResponseInputItems(port: port, responseID: responseID)
+        let (healthData, healthResponse) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/health")!)
+        let health = try XCTUnwrap(JSONSerialization.jsonObject(with: healthData) as? [String: Any])
+        let responses = try XCTUnwrap(health["responses"] as? [String: Any])
+
+        XCTAssertEqual(statusBeforeDelete, 200)
+        XCTAssertEqual(itemsStatusBeforeDelete, 200)
+        XCTAssertEqual((deleteResponse as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(deleteObject["id"] as? String, responseID)
+        XCTAssertEqual(deleteObject["object"] as? String, "response")
+        XCTAssertEqual(deleteObject["deleted"] as? Bool, true)
+        XCTAssertEqual(statusAfterDelete, 404)
+        XCTAssertNil(retrievedAfterDelete?["id"])
+        XCTAssertEqual(itemsStatusAfterDelete, 404)
+        XCTAssertNil(itemsAfterDelete?["data"])
+        XCTAssertEqual((healthResponse as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual((responses["sessions"] as? NSNumber)?.intValue, 0)
+        XCTAssertEqual((responses["stored"] as? NSNumber)?.intValue, 0)
+        XCTAssertEqual((responses["inputItems"] as? NSNumber)?.intValue, 0)
+        XCTAssertEqual((responses["toolCallMemory"] as? NSNumber)?.intValue, 0)
+    }
+
+    func testResponsesDeleteUnknownResponseReturns404() async throws {
+        let port = try unusedTCPPort()
+        let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness())
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/responses/resp_missing")!)
+        request.httpMethod = "DELETE"
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let text = String(data: data, encoding: .utf8) ?? ""
+
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+        XCTAssertTrue(text.contains(#""code":"not_found""#) || text.contains(#""code" : "not_found""#))
     }
 
     func testStreamingResponsesStoreCompletedResponseForRetrieval() async throws {
