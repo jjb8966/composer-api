@@ -60,7 +60,10 @@ struct ContentView: View {
 
             HStack(spacing: 8) {
                 StatusPill(tone: model.sdkConfigured && model.hasCursorAPIKey && !model.needsKeychainPermission ? .ok : .warning, text: model.sdkStatusText)
-                StatusPill(tone: model.isRunning ? .ok : .muted, text: model.isRunning ? "Running" : "Stopped")
+                StatusPill(
+                    tone: model.isRunning ? (model.needsKeychainPermission ? .warning : .ok) : .muted,
+                    text: model.isRunning ? (model.needsKeychainPermission ? "Locked" : "Running") : "Stopped"
+                )
                 HeaderPageTabs(selection: $topPage)
             }
         }
@@ -577,10 +580,10 @@ struct SettingsPage: View {
                     tone: model.hasCursorAPIKey ? .ok : .warning
                 )
                 SettingsSummaryTile(
-                    icon: model.isRunning ? "checkmark.circle.fill" : "power.circle",
-                    title: model.isRunning ? "API Running" : (model.sdkConfigured ? (model.hasCursorAPIKey ? "Ready to Start" : "Needs Key") : "Build Incomplete"),
-                    detail: model.isRunning ? model.baseURL : (model.sdkConfigured ? "Bundled transport" : "Transport missing"),
-                    tone: model.isRunning && model.sdkConfigured ? .ok : (model.sdkConfigured ? .muted : .warning)
+                    icon: model.isRunning ? (model.needsKeychainPermission ? "lock.circle.fill" : "checkmark.circle.fill") : "power.circle",
+                    title: model.isRunning ? (model.needsKeychainPermission ? "API Locked" : "API Running") : (model.sdkConfigured ? (model.hasCursorAPIKey ? "Ready to Start" : "Needs Key") : "Build Incomplete"),
+                    detail: model.isRunning ? (model.needsKeychainPermission ? "Unlock saved key" : model.baseURL) : (model.sdkConfigured ? "Bundled transport" : "Transport missing"),
+                    tone: model.isRunning && model.sdkConfigured && !model.needsKeychainPermission ? .ok : (model.sdkConfigured && !model.needsKeychainPermission ? .muted : .warning)
                 )
                 SettingsSummaryTile(
                     icon: model.settings.launchAtLogin ? "power.circle.fill" : "power.circle",

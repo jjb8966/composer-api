@@ -53,7 +53,7 @@ public struct LocalCursorSDKHarness: CursorSDKHarness {
                         throw CursorAPIError.invalidConfiguration("This \(CursorAPIBrand.displayName) build is missing its bundled Composer transport. Repackage the app with release defaults or inspect Settings > Advanced Transport Overrides.")
                     }
 
-                    let apiKey = Self.resolvedCursorAPIKey(from: authorization, settings: settings)
+                    let apiKey = try Self.resolvedCursorAPIKeyForRequest(from: authorization, settings: settings)
                     guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw CursorAPIError.unauthorized
                     }
@@ -207,6 +207,19 @@ public struct LocalCursorSDKHarness: CursorSDKHarness {
             return settings.cursorAPIKey
         }
         return token
+    }
+
+    static func resolvedCursorAPIKeyForRequest(from authorization: String?, settings: CursorAPISettings) throws -> String {
+        if let token = bearerToken(authorization), !isLocalPlaceholderToken(token) {
+            return token
+        }
+        if settings.hasInlineCursorAPIKey {
+            return settings.cursorAPIKey
+        }
+        if settings.keychainCursorAPIKeyAvailable {
+            throw CursorAPIError.keychainLocked
+        }
+        return ""
     }
 
     private static func bearerToken(_ authorization: String?) -> String? {

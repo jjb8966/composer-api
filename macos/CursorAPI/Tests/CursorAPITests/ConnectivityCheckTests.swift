@@ -137,6 +137,20 @@ final class ConnectivityCheckTests: XCTestCase {
 
         XCTAssertEqual(LocalCursorSDKHarness.resolvedCursorAPIKey(from: "Bearer crsr_direct", settings: settings), "crsr_direct")
     }
+
+    func testSDKHarnessReportsLockedKeyForLocalPlaceholderTokens() throws {
+        let settings = CursorAPISettings(keychainCursorAPIKeyAvailable: true)
+
+        XCTAssertThrowsError(try LocalCursorSDKHarness.resolvedCursorAPIKeyForRequest(from: "Bearer cursor-local", settings: settings)) { error in
+            XCTAssertEqual(error as? CursorAPIError, .keychainLocked)
+        }
+        XCTAssertEqual(try LocalCursorSDKHarness.resolvedCursorAPIKeyForRequest(from: "Bearer crsr_direct", settings: settings), "crsr_direct")
+
+        let payload = OpenAICompatibility.openAIError(CursorAPIError.keychainLocked)
+        let error = try XCTUnwrap(payload["error"] as? [String: Any])
+        XCTAssertEqual(error["code"] as? String, "keychain_locked")
+        XCTAssertTrue((error["message"] as? String)?.contains("Unlock Key") == true)
+    }
 }
 
 private actor ExchangeCounter {

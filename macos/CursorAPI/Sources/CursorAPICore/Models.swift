@@ -97,6 +97,7 @@ public enum CursorAPIError: Error, LocalizedError, Equatable {
     case badRequest(String)
     case notFound
     case unauthorized
+    case keychainLocked
     case invalidConfiguration(String)
     case upstream(String)
     case transport(String)
@@ -109,6 +110,8 @@ public enum CursorAPIError: Error, LocalizedError, Equatable {
             return "Not found"
         case .unauthorized:
             return "Missing or invalid authorization"
+        case .keychainLocked:
+            return "Saved Cursor API key is locked. Open \(CursorAPIBrand.displayName) and click Unlock Key before using one-click agent configs."
         }
     }
 
@@ -116,7 +119,7 @@ public enum CursorAPIError: Error, LocalizedError, Equatable {
         switch self {
         case .badRequest:
             return 400
-        case .unauthorized:
+        case .unauthorized, .keychainLocked:
             return 401
         case .notFound:
             return 404
@@ -135,6 +138,8 @@ public enum CursorAPIError: Error, LocalizedError, Equatable {
             return "not_found"
         case .unauthorized:
             return "unauthorized"
+        case .keychainLocked:
+            return "keychain_locked"
         case .invalidConfiguration:
             return "invalid_configuration"
         case .upstream:
