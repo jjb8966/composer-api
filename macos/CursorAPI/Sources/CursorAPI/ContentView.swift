@@ -1,4 +1,5 @@
 import CursorAPICore
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -443,6 +444,10 @@ struct ConnectionPage: View {
                     .padding(.vertical, 8)
                     .background(AppTheme.controlBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                IconActionButton(systemName: "doc.on.doc", help: "Copy local API URL") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(model.baseURL, forType: .string)
+                }
                 Spacer()
                 PillActionButton(model.isRunning ? "Stop" : "Start") {
                     model.isRunning ? model.stopServer() : model.startServer()
