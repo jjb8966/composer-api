@@ -69,6 +69,25 @@ public final class LocalAPIServer: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    public func start(preferredPort: UInt16, fallbackLimit: Int) throws -> UInt16 {
+        var lastError: (any Error)?
+        let maxAttempts = max(1, fallbackLimit)
+        for offset in 0..<maxAttempts {
+            let candidateValue = Int(preferredPort) + offset
+            guard candidateValue <= Int(UInt16.max), let candidate = UInt16(exactly: candidateValue) else {
+                break
+            }
+            do {
+                try start(port: candidate)
+                return candidate
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError ?? CursorAPIError.transport("Could not find an available local API port.")
+    }
+
     public func stop() {
         listener?.cancel()
         listener = nil

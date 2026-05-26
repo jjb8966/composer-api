@@ -5,6 +5,8 @@ import ServiceManagement
 
 @MainActor
 final class CursorAPIAppModel: ObservableObject {
+    private static let portFallbackLimit = 20
+
     @Published var settings: CursorAPISettings
     @Published var isRunning = false
     @Published var statusText = "Stopped"
@@ -83,10 +85,16 @@ final class CursorAPIAppModel: ObservableObject {
         do {
             settings = try store.resolvingCursorAPIKey(in: settings, allowUserPrompt: allowKeychainPrompt)
             settings.keychainCursorAPIKeyAvailable = true
-            try server.start(port: settings.port)
+            let requestedPort = settings.port
+            let activePort = try server.start(preferredPort: requestedPort, fallbackLimit: Self.portFallbackLimit)
+            settings.port = activePort
             isRunning = true
             needsKeychainPermission = false
             updateStatusText()
+            if activePort != requestedPort {
+                statusText = "Port \(requestedPort) was busy; listening on \(baseURL)"
+                refreshIntegrations()
+            }
             lastError = nil
         } catch AppSettingsStoreError.keychainPermissionRequired {
             isRunning = false

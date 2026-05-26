@@ -104,6 +104,30 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertNil(second.port)
     }
 
+    func testStartFallsBackWhenPreferredPortIsAlreadyInUse() async throws {
+        var port = try unusedTCPPort()
+        while port > UInt16.max - 20 {
+            port = try unusedTCPPort()
+        }
+        let preferredPort = port
+        let first = LocalAPIServer(settingsProvider: { CursorAPISettings(port: preferredPort) }, harness: MockHarness())
+        let second = LocalAPIServer(settingsProvider: { CursorAPISettings(port: preferredPort) }, harness: MockHarness())
+        try first.start(port: preferredPort)
+        defer {
+            first.stop()
+            second.stop()
+        }
+
+        let selectedPort = try second.start(preferredPort: preferredPort, fallbackLimit: 20)
+        XCTAssertNotEqual(selectedPort, preferredPort)
+        XCTAssertEqual(second.port, selectedPort)
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let (data, response) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(selectedPort)/health")!)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertNotNil(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
     func testModelsEndpoint() async throws {
         let port = try unusedTCPPort()
         let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness())
