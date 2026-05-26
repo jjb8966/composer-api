@@ -6,6 +6,8 @@ public final class AgentProvisioner: @unchecked Sendable {
     private static let continueBlockEnd = "# api-for-cursor-end"
     private static let aiderBlockStart = "# api-for-cursor-aider-start"
     private static let aiderBlockEnd = "# api-for-cursor-aider-end"
+    private static let aiderSettingsBlockStart = "# api-for-cursor-aider-model-settings-start"
+    private static let aiderSettingsBlockEnd = "# api-for-cursor-aider-model-settings-end"
 
     private let homeDirectory: URL
     private let fileManager: FileManager
@@ -231,6 +233,8 @@ public final class AgentProvisioner: @unchecked Sendable {
         }
         let text = fileText(url)
         let installed = aiderConfigMatches(text, settings: settings)
+            && aiderModelMetadataMatches(settings: settings)
+            && aiderModelSettingsMatches(settings: settings)
         let detail = installed ? "OpenAI-compatible provider installed" : providerStatusDetail(text: text, settings: settings)
         return AgentIntegrationStatus(id: .aider, installed: installed, configPath: url.path, detail: detail)
     }
@@ -342,6 +346,45 @@ public final class AgentProvisioner: @unchecked Sendable {
             && topLevelYAMLValue("editor-model", in: text) == "openai/composer-2.5-fast"
             && topLevelYAMLValue("openai-api-base", in: text) == settings.baseURL.absoluteString
             && topLevelYAMLValue("openai-api-key", in: text) == "cursor-local"
+            && topLevelYAMLValue("model-settings-file", in: text) == aiderModelSettingsURL().path
+            && topLevelYAMLValue("model-metadata-file", in: text) == aiderModelMetadataURL().path
+            && topLevelYAMLValue("show-model-warnings", in: text)?.lowercased() == "false"
+            && topLevelYAMLValue("check-model-accepts-settings", in: text)?.lowercased() == "false"
+    }
+
+    private func aiderModelMetadataMatches(settings: CursorAPISettings) -> Bool {
+        let url = aiderModelMetadataURL()
+        guard fileManager.fileExists(atPath: url.path),
+              let root = try? readJSONObject(url, defaultValue: [:]) else {
+            return false
+        }
+        return ComposerModels.all.allSatisfy { model in
+            guard let metadata = root["openai/\(model.id)"] as? [String: Any] else {
+                return false
+            }
+            return stringValue(metadata["litellm_provider"]) == "openai"
+                && stringValue(metadata["mode"]) == "chat"
+                && intValue(metadata["max_tokens"]) == model.outputLimit
+                && intValue(metadata["max_input_tokens"]) == model.contextWindow
+                && intValue(metadata["max_output_tokens"]) == model.outputLimit
+                && doubleValue(metadata["input_cost_per_token"]) == model.inputCost / 1_000_000
+                && doubleValue(metadata["output_cost_per_token"]) == model.outputCost / 1_000_000
+        }
+    }
+
+    private func aiderModelSettingsMatches(settings: CursorAPISettings) -> Bool {
+        let text = fileText(aiderModelSettingsURL())
+        return text.contains(Self.aiderSettingsBlockStart)
+            && text.contains(Self.aiderSettingsBlockEnd)
+            && ComposerModels.all.allSatisfy { model in
+                text.contains("- name: openai/\(model.id)")
+                    && text.contains("edit_format: diff")
+                    && text.contains("weak_model_name: openai/composer-2.5-fast")
+                    && text.contains("editor_model_name: openai/composer-2.5-fast")
+                    && text.contains("editor_edit_format: editor-diff")
+                    && text.contains("use_repo_map: true")
+                    && text.contains("use_temperature: false")
+            }
     }
 
     private func installCline(settings: CursorAPISettings) throws {
@@ -448,10 +491,23 @@ public final class AgentProvisioner: @unchecked Sendable {
     }
 
     private func installAider(settings: CursorAPISettings) throws {
+        try installAiderModelMetadata()
+        try installAiderModelSettings()
+
         let url = aiderConfigURL()
         var text = removeMarkedAiderBlock(from: fileText(url))
         text = removeTopLevelYAMLKeys(
-            ["model", "weak-model", "editor-model", "openai-api-base", "openai-api-key"],
+            [
+                "model",
+                "weak-model",
+                "editor-model",
+                "openai-api-base",
+                "openai-api-key",
+                "model-settings-file",
+                "model-metadata-file",
+                "show-model-warnings",
+                "check-model-accepts-settings"
+            ],
             from: text
         ).trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -459,6 +515,37 @@ public final class AgentProvisioner: @unchecked Sendable {
             text += "\n\n"
         }
         text += aiderConfigBlock(settings: settings)
+        text += "\n"
+        try writeText(text, to: url)
+    }
+
+    private func installAiderModelMetadata() throws {
+        let url = aiderModelMetadataURL()
+        var root = try readJSONObject(url, defaultValue: [:])
+        for model in ComposerModels.all {
+            root["openai/\(model.id)"] = [
+                "max_tokens": model.outputLimit,
+                "max_input_tokens": model.contextWindow,
+                "max_output_tokens": model.outputLimit,
+                "input_cost_per_token": model.inputCost / 1_000_000,
+                "output_cost_per_token": model.outputCost / 1_000_000,
+                "litellm_provider": "openai",
+                "mode": "chat"
+            ]
+        }
+        try writeJSONObject(root, to: url)
+    }
+
+    private func installAiderModelSettings() throws {
+        let url = aiderModelSettingsURL()
+        let names = Set(ComposerModels.all.map { "openai/\($0.id)" })
+        var text = removeMarkedAiderSettingsBlock(from: fileText(url))
+        text = removeTopLevelYAMLListItems(named: names, from: text)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty {
+            text += "\n\n"
+        }
+        text += aiderModelSettingsBlock()
         text += "\n"
         try writeText(text, to: url)
     }
@@ -525,6 +612,14 @@ public final class AgentProvisioner: @unchecked Sendable {
 
     private func aiderConfigURL() -> URL {
         homeDirectory.appending(path: ".aider.conf.yml")
+    }
+
+    private func aiderModelMetadataURL() -> URL {
+        homeDirectory.appending(path: ".aider.model.metadata.json")
+    }
+
+    private func aiderModelSettingsURL() -> URL {
+        homeDirectory.appending(path: ".aider.model.settings.yml")
     }
 
     private func configHomeDirectory() -> URL {
@@ -612,8 +707,29 @@ public final class AgentProvisioner: @unchecked Sendable {
             "editor-model: openai/composer-2.5-fast",
             "openai-api-base: \(settings.baseURL.absoluteString)",
             "openai-api-key: cursor-local",
+            "model-settings-file: \(yamlQuoted(aiderModelSettingsURL().path))",
+            "model-metadata-file: \(yamlQuoted(aiderModelMetadataURL().path))",
+            "show-model-warnings: false",
+            "check-model-accepts-settings: false",
             Self.aiderBlockEnd
         ].joined(separator: "\n")
+    }
+
+    private func aiderModelSettingsBlock() -> String {
+        var lines = [Self.aiderSettingsBlockStart]
+        for model in ComposerModels.all {
+            lines.append(contentsOf: [
+                "- name: openai/\(model.id)",
+                "  edit_format: diff",
+                "  weak_model_name: openai/composer-2.5-fast",
+                "  editor_model_name: openai/composer-2.5-fast",
+                "  editor_edit_format: editor-diff",
+                "  use_repo_map: true",
+                "  use_temperature: false"
+            ])
+        }
+        lines.append(Self.aiderSettingsBlockEnd)
+        return lines.joined(separator: "\n")
     }
 
     private func removeMarkedContinueBlock(from text: String) -> String {
@@ -622,6 +738,10 @@ public final class AgentProvisioner: @unchecked Sendable {
 
     private func removeMarkedAiderBlock(from text: String) -> String {
         removeMarkedBlock(from: text, start: Self.aiderBlockStart, end: Self.aiderBlockEnd)
+    }
+
+    private func removeMarkedAiderSettingsBlock(from text: String) -> String {
+        removeMarkedBlock(from: text, start: Self.aiderSettingsBlockStart, end: Self.aiderSettingsBlockEnd)
     }
 
     private func removeMarkedBlock(from text: String, start: String, end: String) -> String {
@@ -662,6 +782,36 @@ public final class AgentProvisioner: @unchecked Sendable {
             .joined(separator: "\n")
     }
 
+    private func removeTopLevelYAMLListItems(named names: Set<String>, from text: String) -> String {
+        var output: [String] = []
+        var skipping = false
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let startsItem = !line.hasPrefix(" ") && !line.hasPrefix("\t") && trimmed.hasPrefix("- ")
+            if startsItem {
+                skipping = false
+                if let name = yamlListItemName(trimmed), names.contains(name) {
+                    skipping = true
+                    continue
+                }
+            }
+            if !skipping {
+                output.append(line)
+            }
+        }
+        return output.joined(separator: "\n")
+    }
+
+    private func yamlListItemName(_ trimmedLine: String) -> String? {
+        let prefix = "- name:"
+        guard trimmedLine.hasPrefix(prefix) else {
+            return nil
+        }
+        let value = String(trimmedLine.dropFirst(prefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return unquotedYAMLScalar(value)
+    }
+
     private func topLevelYAMLValue(_ key: String, in text: String) -> String? {
         for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -692,6 +842,13 @@ public final class AgentProvisioner: @unchecked Sendable {
             return String(value.dropFirst().dropLast())
         }
         return value
+    }
+
+    private func yamlQuoted(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
     }
 
     private func localProviderMatches(_ provider: [String: Any], settings: CursorAPISettings) -> Bool {

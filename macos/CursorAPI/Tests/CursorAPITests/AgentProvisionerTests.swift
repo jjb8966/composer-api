@@ -193,6 +193,26 @@ final class AgentProvisionerTests: XCTestCase {
         openai-api-key: old-key
         show-model-warnings: false
         """.write(to: config, atomically: true, encoding: .utf8)
+        let metadataFile = home.appending(path: ".aider.model.metadata.json")
+        try """
+        {
+          "other/provider-model": {
+            "max_tokens": 1024,
+            "litellm_provider": "other"
+          },
+          "openai/composer-2.5": {
+            "max_tokens": 1024,
+            "litellm_provider": "openai"
+          }
+        }
+        """.write(to: metadataFile, atomically: true, encoding: .utf8)
+        let settingsFile = home.appending(path: ".aider.model.settings.yml")
+        try """
+        - name: other/provider-model
+          edit_format: whole
+        - name: openai/composer-2.5
+          edit_format: whole
+        """.write(to: settingsFile, atomically: true, encoding: .utf8)
 
         try provisioner.install(.aider, settings: settings)
         try provisioner.install(.aider, settings: settings)
@@ -206,6 +226,10 @@ final class AgentProvisionerTests: XCTestCase {
         XCTAssertTrue(text.contains("editor-model: openai/composer-2.5-fast"))
         XCTAssertTrue(text.contains("openai-api-base: http://127.0.0.1:8787/v1"))
         XCTAssertTrue(text.contains("openai-api-key: cursor-local"))
+        XCTAssertTrue(text.contains("model-settings-file: \"\(settingsFile.path)\""))
+        XCTAssertTrue(text.contains("model-metadata-file: \"\(metadataFile.path)\""))
+        XCTAssertTrue(text.contains("show-model-warnings: false"))
+        XCTAssertTrue(text.contains("check-model-accepts-settings: false"))
         XCTAssertFalse(text.contains("old-model"))
         XCTAssertFalse(text.contains("old-key"))
         XCTAssertEqual(countOccurrences(of: "# api-for-cursor-aider-start", in: text), 1)
@@ -213,9 +237,37 @@ final class AgentProvisionerTests: XCTestCase {
         XCTAssertEqual(countOccurrences(of: "openai-api-base:", in: text), 1)
         XCTAssertTrue(provisioner.status(for: .aider, settings: settings).installed)
 
+        let metadata = try readJSONObject(metadataFile)
+        XCTAssertNotNil(metadata["other/provider-model"])
+        let composerMetadata = try XCTUnwrap(metadata["openai/composer-2.5"] as? [String: Any])
+        let fastMetadata = try XCTUnwrap(metadata["openai/composer-2.5-fast"] as? [String: Any])
+        XCTAssertEqual((composerMetadata["max_input_tokens"] as? NSNumber)?.intValue, 200_000)
+        XCTAssertEqual((composerMetadata["max_output_tokens"] as? NSNumber)?.intValue, 65_536)
+        XCTAssertEqual((composerMetadata["input_cost_per_token"] as? NSNumber)?.doubleValue, 0.5 / 1_000_000)
+        XCTAssertEqual((composerMetadata["output_cost_per_token"] as? NSNumber)?.doubleValue, 2.5 / 1_000_000)
+        XCTAssertEqual(fastMetadata["litellm_provider"] as? String, "openai")
+
+        let modelSettings = try String(contentsOf: settingsFile, encoding: .utf8)
+        XCTAssertTrue(modelSettings.contains("- name: other/provider-model"))
+        XCTAssertTrue(modelSettings.contains("# api-for-cursor-aider-model-settings-start"))
+        XCTAssertTrue(modelSettings.contains("- name: openai/composer-2.5"))
+        XCTAssertTrue(modelSettings.contains("- name: openai/composer-2.5-fast"))
+        XCTAssertTrue(modelSettings.contains("weak_model_name: openai/composer-2.5-fast"))
+        XCTAssertTrue(modelSettings.contains("editor_edit_format: editor-diff"))
+        XCTAssertTrue(modelSettings.contains("use_repo_map: true"))
+        XCTAssertTrue(modelSettings.contains("use_temperature: false"))
+        XCTAssertEqual(countOccurrences(of: "- name: openai/composer-2.5\n", in: modelSettings), 1)
+        XCTAssertEqual(countOccurrences(of: "# api-for-cursor-aider-model-settings-start", in: modelSettings), 1)
+
         let backups = try FileManager.default.contentsOfDirectory(at: config.deletingLastPathComponent(), includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.hasPrefix(".aider.conf.yml.api-for-cursor-backup.") }
         XCTAssertEqual(backups.count, 1)
+        let metadataBackups = try FileManager.default.contentsOfDirectory(at: metadataFile.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(".aider.model.metadata.json.api-for-cursor-backup.") }
+        let modelSettingsBackups = try FileManager.default.contentsOfDirectory(at: settingsFile.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(".aider.model.settings.yml.api-for-cursor-backup.") }
+        XCTAssertEqual(metadataBackups.count, 1)
+        XCTAssertEqual(modelSettingsBackups.count, 1)
     }
 
     func testInstallsClineAndKiloProfiles() throws {
