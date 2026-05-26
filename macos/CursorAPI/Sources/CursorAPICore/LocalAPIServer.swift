@@ -129,31 +129,32 @@ public final class LocalAPIServer: @unchecked Sendable {
     }
 
     private func route(_ request: HTTPRequest) async -> RoutedHTTPResponse {
+        let method = request.method.uppercased()
         do {
             let path = normalizedAPIPath(request.path)
-            if request.method == "OPTIONS" {
+            if method == "OPTIONS" {
                 return .response(HTTPResponse(status: 204, headers: corsHeaders(), body: Data()))
             }
-            if request.method == "GET", path == "/" || path == "/v1" {
+            if isReadMethod(method), path == "/" || path == "/v1" {
                 let settings = settingsProvider()
                 let responseState = await responseSessions.stats()
-                return try .response(withCORS(HTTPResponse.json(serviceObject(settings: settings, responseState: responseState))))
+                return try readResponse(withCORS(HTTPResponse.json(serviceObject(settings: settings, responseState: responseState))), method: method)
             }
-            if request.method == "GET", path == "/health" {
+            if isReadMethod(method), path == "/health" {
                 let settings = settingsProvider()
                 let responseState = await responseSessions.stats()
-                return try .response(HTTPResponse.json(healthObject(settings: settings, responseState: responseState)))
+                return try readResponse(HTTPResponse.json(healthObject(settings: settings, responseState: responseState)), method: method)
             }
-            if request.method == "GET", path == "/v1/models" {
-                return try .response(withCORS(HTTPResponse.json(OpenAICompatibility.modelList())))
+            if isReadMethod(method), path == "/v1/models" {
+                return try readResponse(withCORS(HTTPResponse.json(OpenAICompatibility.modelList())), method: method)
             }
-            if request.method == "GET", let modelID = modelID(from: path) {
+            if isReadMethod(method), let modelID = modelID(from: path) {
                 guard let model = ComposerModels.model(for: modelID) else {
                     throw CursorAPIError.notFound
                 }
-                return try .response(withCORS(HTTPResponse.json(OpenAICompatibility.modelObject(model))))
+                return try readResponse(withCORS(HTTPResponse.json(OpenAICompatibility.modelObject(model))), method: method)
             }
-            if request.method == "POST", path == "/v1/completions" {
+            if method == "POST", path == "/v1/completions" {
                 var prepared = try OpenAICompatibility.prepareCompletionRequest(request.body)
                 prepared.sessionKey = sessionAffinity(request)
                 let settings = settingsProvider()
@@ -169,7 +170,7 @@ public final class LocalAPIServer: @unchecked Sendable {
                 let output = try await harness.complete(prepared: prepared, settings: settings, authorization: request.header("authorization"))
                 return try .response(withCORS(HTTPResponse.json(OpenAICompatibility.completionResponse(id: id, created: created, prepared: prepared, output: output))))
             }
-            if request.method == "POST", path == "/v1/chat/completions" {
+            if method == "POST", path == "/v1/chat/completions" {
                 var prepared = try OpenAICompatibility.prepareChatRequest(request.body)
                 prepared.sessionKey = sessionAffinity(request)
                 let settings = settingsProvider()
@@ -185,7 +186,7 @@ public final class LocalAPIServer: @unchecked Sendable {
                 let output = try await harness.complete(prepared: prepared, settings: settings, authorization: request.header("authorization"))
                 return try .response(withCORS(HTTPResponse.json(OpenAICompatibility.chatCompletionResponse(id: id, created: created, prepared: prepared, output: output))))
             }
-            if request.method == "POST", path == "/v1/responses" {
+            if method == "POST", path == "/v1/responses" {
                 var prepared = try OpenAICompatibility.prepareResponsesRequest(request.body)
                 if let previousResponseID = prepared.previousResponseID {
                     let rememberedToolCalls = await responseSessions.responseToolCalls(responseID: previousResponseID)
@@ -224,13 +225,13 @@ public final class LocalAPIServer: @unchecked Sendable {
                 }
                 return .response(withCORS(response))
             }
-            if request.method == "GET", let responseID = responseInputItemsID(from: path) {
+            if isReadMethod(method), let responseID = responseInputItemsID(from: path) {
                 guard let data = await responseSessions.responseInputItemsData(responseID: responseID) else {
                     throw CursorAPIError.notFound
                 }
-                return .response(withCORS(HTTPResponse.data(data, contentType: "application/json; charset=utf-8")))
+                return readResponse(withCORS(HTTPResponse.data(data, contentType: "application/json; charset=utf-8")), method: method)
             }
-            if request.method == "DELETE", let responseID = responseID(from: path) {
+            if method == "DELETE", let responseID = responseID(from: path) {
                 guard await responseSessions.deleteResponse(responseID: responseID) else {
                     throw CursorAPIError.notFound
                 }
@@ -240,16 +241,28 @@ public final class LocalAPIServer: @unchecked Sendable {
                     "deleted": true
                 ])))
             }
-            if request.method == "GET", let responseID = responseID(from: path) {
+            if isReadMethod(method), let responseID = responseID(from: path) {
                 guard let data = await responseSessions.responseData(responseID: responseID) else {
                     throw CursorAPIError.notFound
                 }
-                return .response(withCORS(HTTPResponse.data(data, contentType: "application/json; charset=utf-8")))
+                return readResponse(withCORS(HTTPResponse.data(data, contentType: "application/json; charset=utf-8")), method: method)
             }
             throw CursorAPIError.notFound
         } catch {
-            return .response(errorResponse(error))
+            return readResponse(errorResponse(error), method: method)
         }
+    }
+
+    private func isReadMethod(_ method: String) -> Bool {
+        method == "GET" || method == "HEAD"
+    }
+
+    private func readResponse(_ response: HTTPResponse, method: String) -> RoutedHTTPResponse {
+        var response = response
+        if method == "HEAD" {
+            response.body = Data()
+        }
+        return .response(response)
     }
 
     private func completionChunks(
@@ -552,7 +565,7 @@ public final class LocalAPIServer: @unchecked Sendable {
         [
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Authorization, Content-Type, OpenAI-Beta, OpenAI-Organization, OpenAI-Project, X-Session-Affinity, X-OpenCode-Session-Id, X-OpenCode-Session, X-CursorAPI-Session, X-CursorAPI-Project, X-Project-Path, X-Workspace-Path, X-Working-Directory",
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS"
+            "Access-Control-Allow-Methods": "GET, HEAD, POST, DELETE, OPTIONS"
         ]
     }
 

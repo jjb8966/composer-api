@@ -216,6 +216,32 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertTrue(text.contains("composer-2.5-fast"))
     }
 
+    func testHeadReadEndpointsReturnStatusWithoutBody() async throws {
+        let port = try unusedTCPPort()
+        let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness())
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        for path in ["/", "/v1", "/health", "/v1/models", "/v1/models/composer-2.5-fast"] {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
+            request.httpMethod = "HEAD"
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let http = try XCTUnwrap(response as? HTTPURLResponse, path)
+
+            XCTAssertEqual(http.statusCode, 200, path)
+            XCTAssertTrue(data.isEmpty, path)
+            XCTAssertEqual(http.value(forHTTPHeaderField: "Access-Control-Allow-Origin"), "*", path)
+        }
+
+        var missingRequest = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/models/not-a-model")!)
+        missingRequest.httpMethod = "HEAD"
+        let (missingData, missingResponse) = try await URLSession.shared.data(for: missingRequest)
+
+        XCTAssertEqual((missingResponse as? HTTPURLResponse)?.statusCode, 404)
+        XCTAssertTrue(missingData.isEmpty)
+    }
+
     func testModelsEndpointAcceptsOriginBaseURLAndTrailingSlash() async throws {
         let port = try unusedTCPPort()
         let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness())
@@ -356,6 +382,7 @@ final class LocalAPIServerTests: XCTestCase {
         let (_, response) = try await URLSession.shared.data(for: request)
         let http = try XCTUnwrap(response as? HTTPURLResponse)
         let allowedHeaders = http.value(forHTTPHeaderField: "Access-Control-Allow-Headers") ?? ""
+        let allowedMethods = http.value(forHTTPHeaderField: "Access-Control-Allow-Methods") ?? ""
 
         XCTAssertEqual(http.statusCode, 204)
         XCTAssertTrue(allowedHeaders.contains("X-Session-Affinity"))
@@ -364,6 +391,7 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertTrue(allowedHeaders.contains("X-CursorAPI-Session"))
         XCTAssertTrue(allowedHeaders.contains("X-Project-Path"))
         XCTAssertTrue(allowedHeaders.contains("OpenAI-Beta"))
+        XCTAssertTrue(allowedMethods.contains("HEAD"))
     }
 
     func testCompletionsEndpoint() async throws {
