@@ -6,6 +6,7 @@ APP_PATH="$ROOT_DIR/dist/API for Cursor.app"
 KEEP_RUNNING=0
 REQUIRE_SERVER=0
 TIMEOUT_SECONDS=20
+TEMP_FILES=()
 
 usage() {
   cat <<USAGE
@@ -80,6 +81,9 @@ ICON_HEIGHT="$(sips -g pixelHeight "$ICON_PATH" 2>/dev/null | awk '/pixelHeight:
 [ "$ICON_HEIGHT" = "1024" ] || fail "app icon height is $ICON_HEIGHT, expected 1024"
 
 cleanup() {
+  for file in "${TEMP_FILES[@]}"; do
+    rm -f "$file"
+  done
   if [ "$KEEP_RUNNING" -eq 0 ]; then
     osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
   fi
@@ -96,7 +100,7 @@ fi
 
 open -n "$APP_PATH"
 
-window_visible() {
+window_id() {
   swift - "$APP_NAME" <<'SWIFT'
 import CoreGraphics
 import Foundation
@@ -109,6 +113,7 @@ guard let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as
 for window in windows {
     guard (window[kCGWindowOwnerName as String] as? String) == appName else { continue }
     guard (window[kCGWindowLayer as String] as? Int) == 0 else { continue }
+    guard let id = window[kCGWindowNumber as String] as? UInt32 else { continue }
     guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
           let width = bounds["Width"] as? Double,
           let height = bounds["Height"] as? Double,
@@ -116,6 +121,7 @@ for window in windows {
           height >= 500 else {
         continue
     }
+    print(id)
     exit(0)
 }
 
@@ -124,12 +130,91 @@ SWIFT
 }
 
 deadline=$((SECONDS + TIMEOUT_SECONDS))
-until window_visible; do
+WINDOW_ID=""
+until WINDOW_ID="$(window_id)"; do
   if [ "$SECONDS" -ge "$deadline" ]; then
     fail "main window did not appear"
   fi
   sleep 0.5
 done
+
+verify_window_pixels() {
+  swift - "$1" <<'SWIFT'
+import AppKit
+import Foundation
+
+let url = URL(fileURLWithPath: CommandLine.arguments[1])
+guard let image = NSImage(contentsOf: url),
+      let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+    FileHandle.standardError.write(Data("could not decode window screenshot\n".utf8))
+    exit(1)
+}
+
+let width = cgImage.width
+let height = cgImage.height
+guard width >= 700, height >= 500 else {
+    FileHandle.standardError.write(Data("window screenshot is unexpectedly small: \(width)x\(height)\n".utf8))
+    exit(1)
+}
+
+var pixels = [UInt8](repeating: 0, count: width * height * 4)
+guard let context = CGContext(
+    data: &pixels,
+    width: width,
+    height: height,
+    bitsPerComponent: 8,
+    bytesPerRow: width * 4,
+    space: CGColorSpaceCreateDeviceRGB(),
+    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+) else {
+    FileHandle.standardError.write(Data("could not inspect window pixels\n".utf8))
+    exit(1)
+}
+
+context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+let step = max(1, min(width, height) / 90)
+var samples = 0
+var sum = 0.0
+var sumSquares = 0.0
+var buckets = Set<Int>()
+
+for y in stride(from: 0, to: height, by: step) {
+    for x in stride(from: 0, to: width, by: step) {
+        let offset = (y * width + x) * 4
+        let red = Double(pixels[offset])
+        let green = Double(pixels[offset + 1])
+        let blue = Double(pixels[offset + 2])
+        let alpha = pixels[offset + 3]
+        guard alpha > 8 else { continue }
+        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        samples += 1
+        sum += luminance
+        sumSquares += luminance * luminance
+        buckets.insert((Int(red) / 16) << 8 | (Int(green) / 16) << 4 | (Int(blue) / 16))
+    }
+}
+
+guard samples > 100 else {
+    FileHandle.standardError.write(Data("window screenshot had too few visible pixels\n".utf8))
+    exit(1)
+}
+
+let mean = sum / Double(samples)
+let variance = max(0, sumSquares / Double(samples) - mean * mean)
+let standardDeviation = sqrt(variance)
+
+guard standardDeviation > 4.0, buckets.count >= 8 else {
+    FileHandle.standardError.write(Data("window screenshot appears blank or nearly uniform\n".utf8))
+    exit(1)
+}
+SWIFT
+}
+
+screenshot_file="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-window.XXXXXX.png")"
+TEMP_FILES+=("$screenshot_file")
+screencapture -x -l "$WINDOW_ID" "$screenshot_file" >/dev/null 2>&1 || fail "could not capture main window"
+verify_window_pixels "$screenshot_file" || fail "main window screenshot appears blank"
 
 port_candidates() {
   swift - "$BUNDLE_ID" "$TIMEOUT_SECONDS" <<'SWIFT'
@@ -186,7 +271,7 @@ validate_health() {
 }
 
 health_file="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-health.XXXXXX.json")"
-trap 'rm -f "$health_file"; cleanup' EXIT
+TEMP_FILES+=("$health_file")
 
 health_found=0
 deadline=$((SECONDS + TIMEOUT_SECONDS))
