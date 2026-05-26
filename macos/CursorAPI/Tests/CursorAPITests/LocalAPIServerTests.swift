@@ -558,21 +558,49 @@ final class LocalAPIServerTests: XCTestCase {
         try await Task.sleep(nanoseconds: 150_000_000)
 
         let body = #"{"model":"composer-2.5","messages":[{"role":"user","content":"hello from chunked"}]}"#
-        let request = """
-        POST /v1/chat/completions HTTP/1.1\r
-        Host: 127.0.0.1:\(port)\r
-        Content-Type: application/json\r
-        Transfer-Encoding: chunked\r
-        Connection: close\r
-        \r
-        \(chunkedBody(body, sizes: [7, 13, 3]))
-        """
+        let request = [
+            "POST /v1/chat/completions HTTP/1.1",
+            "Host: 127.0.0.1:\(port)",
+            "Content-Type: application/json",
+            "Transfer-Encoding: chunked",
+            "Connection: close",
+            "",
+            chunkedBody(body, sizes: [7, 13, 3])
+        ].joined(separator: "\r\n")
         let response = try await sendRawHTTPRequest(port: port, request: request)
 
         XCTAssertTrue(response.hasPrefix("HTTP/1.1 200 OK"), response)
         XCTAssertTrue(response.contains("chat.completion"), response)
         let prompts = await recorder.prompts()
         XCTAssertTrue(prompts.first?.contains("hello from chunked") == true)
+    }
+
+    func testChatCompletionsSupportsExpectContinueHandshake() async throws {
+        let port = try unusedTCPPort()
+        let recorder = PreparedRequestRecorder()
+        let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness(recorder: recorder))
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let body = #"{"model":"composer-2.5","messages":[{"role":"user","content":"hello after continue"}]}"#
+        let headers = [
+            "POST /v1/chat/completions HTTP/1.1",
+            "Host: 127.0.0.1:\(port)",
+            "Content-Type: application/json",
+            "Content-Length: \(body.utf8.count)",
+            "Expect: 100-continue",
+            "Connection: close",
+            "",
+            ""
+        ].joined(separator: "\r\n")
+        let (interim, final) = try await sendExpectContinueHTTPRequest(port: port, headers: headers, body: body)
+
+        XCTAssertTrue(interim.hasPrefix("HTTP/1.1 100 Continue"), interim)
+        XCTAssertTrue(final.hasPrefix("HTTP/1.1 200 OK"), final)
+        XCTAssertTrue(final.contains("chat.completion"), final)
+        let prompts = await recorder.prompts()
+        XCTAssertTrue(prompts.first?.contains("hello after continue") == true)
     }
 
     func testChatCompletionsEndpointAcceptsOriginBaseURL() async throws {
@@ -1677,6 +1705,63 @@ private extension LocalAPIServerTests {
         }.value
     }
 
+    func sendExpectContinueHTTPRequest(port: UInt16, headers: String, body: String) async throws -> (String, String) {
+        try await Task.detached {
+            let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+            guard descriptor >= 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EINVAL)
+            }
+            defer {
+                close(descriptor)
+            }
+
+            var timeout = timeval(tv_sec: 3, tv_usec: 0)
+            setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = in_port_t(port).bigEndian
+            address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+            let connectResult = withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { rebound in
+                    Darwin.connect(descriptor, rebound, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            guard connectResult == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EINVAL)
+            }
+
+            try sendAll(Array(headers.utf8), descriptor: descriptor)
+            let interimData = try receiveUntilHeaderEnd(descriptor: descriptor)
+            try sendAll(Array(body.utf8), descriptor: descriptor)
+            shutdown(descriptor, SHUT_WR)
+
+            var finalData = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let count = recv(descriptor, &buffer, buffer.count, 0)
+                if count > 0 {
+                    finalData.append(contentsOf: buffer.prefix(count))
+                    continue
+                }
+                if count == 0 {
+                    break
+                }
+                if errno == EINTR {
+                    continue
+                }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EINVAL)
+            }
+
+            return (
+                String(data: interimData, encoding: .utf8) ?? "",
+                String(data: finalData, encoding: .utf8) ?? ""
+            )
+        }.value
+    }
+
     func getResponse(port: UInt16, responseID: String) async throws -> (Int, [String: Any]?) {
         let url = URL(string: "http://127.0.0.1:\(port)/v1/responses/\(responseID)")!
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -1698,6 +1783,44 @@ private extension LocalAPIServerTests {
         let arguments = try XCTUnwrap(function["arguments"] as? String)
         let data = Data(arguments.utf8)
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+private func sendAll(_ bytes: [UInt8], descriptor: Int32) throws {
+    var sent = 0
+    while sent < bytes.count {
+        let count = Darwin.send(descriptor, bytes.withUnsafeBytes { pointer in
+            pointer.baseAddress!.advanced(by: sent)
+        }, bytes.count - sent, 0)
+        if count < 0 {
+            if errno == EINTR { continue }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EINVAL)
+        }
+        sent += count
+    }
+}
+
+private func receiveUntilHeaderEnd(descriptor: Int32) throws -> Data {
+    let terminator = Data("\r\n\r\n".utf8)
+    var data = Data()
+    var byte = [UInt8](repeating: 0, count: 1)
+    while true {
+        let count = recv(descriptor, &byte, byte.count, 0)
+        if count > 0 {
+            data.append(byte[0])
+            if data.count >= terminator.count,
+               data.suffix(terminator.count) == terminator {
+                return data
+            }
+            continue
+        }
+        if count == 0 {
+            return data
+        }
+        if errno == EINTR {
+            continue
+        }
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EINVAL)
     }
 }
 

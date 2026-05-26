@@ -134,10 +134,10 @@ public final class LocalAPIServer: @unchecked Sendable {
 
     private func accept(_ connection: NWConnection) {
         connection.start(queue: queue)
-        read(connection: connection, accumulated: Data())
+        read(connection: connection, accumulated: Data(), sentContinue: false)
     }
 
-    private func read(connection: NWConnection, accumulated: Data) {
+    private func read(connection: NWConnection, accumulated: Data, sentContinue: Bool) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] content, _, isComplete, error in
             guard let self else { return }
             if let error {
@@ -160,10 +160,24 @@ public final class LocalAPIServer: @unchecked Sendable {
                 }
             } else if isComplete {
                 self.send(connection: connection, response: self.errorResponse(CursorAPIError.badRequest("Could not parse HTTP request.")))
+            } else if !sentContinue, HTTPParser.shouldSendContinue(data) {
+                self.sendContinue(connection: connection, accumulated: data)
             } else {
-                self.read(connection: connection, accumulated: data)
+                self.read(connection: connection, accumulated: data, sentContinue: sentContinue)
             }
         }
+    }
+
+    private func sendContinue(connection: NWConnection, accumulated: Data) {
+        let data = Data("HTTP/1.1 100 Continue\r\n\r\n".utf8)
+        connection.send(content: data, completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.send(connection: connection, response: self.errorResponse(error))
+            } else {
+                self.read(connection: connection, accumulated: accumulated, sentContinue: true)
+            }
+        })
     }
 
     private func route(_ request: HTTPRequest) async -> RoutedHTTPResponse {
@@ -1029,31 +1043,23 @@ private final class ListenerStartResult: @unchecked Sendable {
 
 enum HTTPParser {
     static func parse(_ data: Data) -> HTTPRequest? {
-        guard let separatorRange = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
-        let headerData = data[..<separatorRange.lowerBound]
-        guard let headerText = String(data: headerData, encoding: .utf8) else { return nil }
-        let lines = headerText.split(separator: "\r\n", omittingEmptySubsequences: false)
+        guard let headers = parseHeaderBlock(data) else { return nil }
+        let lines = headers.lines
         guard let requestLine = lines.first else { return nil }
         let parts = requestLine.split(separator: " ", maxSplits: 2)
         guard parts.count >= 2 else { return nil }
         let target = String(parts[1])
         let targetParts = target.split(separator: "?", maxSplits: 1).map(String.init)
-        var headers: [String: String] = [:]
-        for line in lines.dropFirst() {
-            guard let index = line.firstIndex(of: ":") else { continue }
-            let key = line[..<index].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let value = line[line.index(after: index)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            headers[key] = value
-        }
-        let bodyStart = separatorRange.upperBound
+        let headerFields = headerFields(lines)
+        let bodyStart = headers.bodyStart
         let body: Data
-        if transferEncodingIsChunked(headers["transfer-encoding"]) {
+        if transferEncodingIsChunked(headerFields["transfer-encoding"]) {
             guard let decoded = decodeChunkedBody(Data(data[bodyStart..<data.endIndex])) else {
                 return nil
             }
             body = decoded
         } else {
-            let expectedLength = Int(headers["content-length"] ?? "0") ?? 0
+            let expectedLength = Int(headerFields["content-length"] ?? "0") ?? 0
             guard data.count - bodyStart >= expectedLength else { return nil }
             body = Data(data[bodyStart..<(bodyStart + expectedLength)])
         }
@@ -1061,9 +1067,46 @@ enum HTTPParser {
             method: String(parts[0]),
             path: targetParts[0],
             query: targetParts.count > 1 ? targetParts[1] : nil,
-            headers: headers,
+            headers: headerFields,
             body: body
         )
+    }
+
+    static func shouldSendContinue(_ data: Data) -> Bool {
+        guard let headers = parseHeaderBlock(data) else { return false }
+        let fields = headerFields(headers.lines)
+        guard fields["expect"]?
+            .split(separator: ",")
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+            .contains("100-continue") == true else {
+            return false
+        }
+        if transferEncodingIsChunked(fields["transfer-encoding"]) {
+            return decodeChunkedBody(Data(data[headers.bodyStart..<data.endIndex])) == nil
+        }
+        let expectedLength = Int(fields["content-length"] ?? "0") ?? 0
+        return expectedLength > 0 && data.count - headers.bodyStart < expectedLength
+    }
+
+    private static func parseHeaderBlock(_ data: Data) -> (lines: [Substring], bodyStart: Data.Index)? {
+        guard let separatorRange = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+        let headerData = data[..<separatorRange.lowerBound]
+        guard let headerText = String(data: headerData, encoding: .utf8) else { return nil }
+        return (
+            headerText.split(separator: "\r\n", omittingEmptySubsequences: false),
+            separatorRange.upperBound
+        )
+    }
+
+    private static func headerFields(_ lines: [Substring]) -> [String: String] {
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            guard let index = line.firstIndex(of: ":") else { continue }
+            let key = line[..<index].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = line[line.index(after: index)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            headers[key] = value
+        }
+        return headers
     }
 
     private static func transferEncodingIsChunked(_ value: String?) -> Bool {
