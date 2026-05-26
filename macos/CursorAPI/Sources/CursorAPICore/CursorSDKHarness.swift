@@ -65,7 +65,7 @@ public struct LocalCursorSDKHarness: CursorSDKHarness {
                     try validate(settings: settings, authorization: authorization)
                     let apiKey = try Self.resolvedCursorAPIKeyForRequest(from: authorization, settings: settings)
                     let agentID = await Self.sessionStore.agentID(for: prepared.sessionKey)
-                    let runID = "msg-\(UUID().uuidString.lowercased())"
+                    let runID = Self.newRunID()
                     let tokenOrigin = settings.cursorAPIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
                     let accessToken = try await Self.accessTokenCache.token(for: apiKey, origin: tokenOrigin) {
                         try await exchangeCursorAPIKey(apiKey, settings: settings)
@@ -101,6 +101,10 @@ public struct LocalCursorSDKHarness: CursorSDKHarness {
                 }
             }
         }
+    }
+
+    static func newRunID() -> String {
+        "run-\(UUID().uuidString.lowercased())"
     }
 
     private func runSDKRequest(
@@ -188,7 +192,55 @@ public struct LocalCursorSDKHarness: CursorSDKHarness {
         request.setValue(requestID, forHTTPHeaderField: "x-original-request-id")
         request.setValue(requestID, forHTTPHeaderField: "x-request-id")
 
-        return try await CursorSDKHTTP2Transport.shared.runStreaming(request: request, initialFrame: framedBody, onFrame: onFrame)
+        if ProcessInfo.processInfo.environment["CURSOR_API_USE_SWIFT_HTTP2_TRANSPORT"] == "1" {
+            return try await CursorSDKHTTP2Transport.shared.runStreaming(request: request, initialFrame: framedBody, onFrame: onFrame)
+        } else {
+            let bridge = try await CursorSDKBridgeServer.shared.endpoint(settings: settings)
+            return try await runBridgeSDKRequest(
+                bridge: bridge,
+                framedBody: framedBody,
+                accessToken: accessToken,
+                requestID: requestID,
+                settings: settings,
+                onFrame: onFrame
+            )
+        }
+    }
+
+    private func runBridgeSDKRequest(
+        bridge: CursorSDKBridgeEndpoint,
+        framedBody: Data,
+        accessToken: String,
+        requestID: String,
+        settings: CursorAPISettings,
+        onFrame: @escaping @Sendable (Data) -> Void
+    ) async throws -> Data {
+        var request = URLRequest(url: bridge.url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 180
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(bridge.token)", forHTTPHeaderField: "Authorization")
+        let body: [String: Any] = [
+            "accessToken": accessToken,
+            "requestId": requestID,
+            "backendBaseUrl": settings.backendBaseURL,
+            "localAgentEndpoint": settings.localAgentEndpoint,
+            "clientVersion": settings.clientVersion.isEmpty ? "sdk-1.0.13" : settings.clientVersion,
+            "runFrame": framedBody.base64EncodedString()
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.withoutEscapingSlashes])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CursorAPIError.transport("Cursor SDK bridge did not return an HTTP response.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let text = String(data: data, encoding: .utf8) ?? "status \(http.statusCode)"
+            throw http.statusCode == 401 ? CursorAPIError.unauthorized : CursorAPIError.upstream(text)
+        }
+        for frame in ConnectProto.frames(from: data) {
+            onFrame(frame)
+        }
+        return data
     }
 
     private func endpointURL(settings: CursorAPISettings) throws -> URL {

@@ -447,6 +447,9 @@ public final class LocalAPIServer: @unchecked Sendable {
                         model: prepared.model,
                         emittedToolCallCount: max(emittedToolCalls.count, output.toolCalls.count)
                     ))
+                    if prepared.streamIncludeUsage {
+                        continuation.yield(OpenAICompatibility.chatCompletionStreamUsage(id: id, created: created, prepared: prepared, output: output))
+                    }
                     continuation.yield(OpenAICompatibility.chatCompletionStreamDone())
                     continuation.finish()
                 } catch {

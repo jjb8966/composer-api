@@ -21,6 +21,7 @@ public struct PreparedChatRequest: Equatable, Sendable {
     public var cursorModelID: String
     public var prompt: String
     public var stream: Bool
+    public var streamIncludeUsage: Bool
     public var promptCharacters: Int
     public var tools: [OpenAIToolSpec]
     public var sessionKey: String?
@@ -34,7 +35,8 @@ public enum OpenAICompatibility {
     public static func modelList() -> [String: Any] {
         [
             "object": "list",
-            "data": ComposerModels.all.map(modelObject)
+            "data": ComposerModels.all.map(modelObject),
+            "models": ComposerModels.all.map(codexModelObject)
         ]
     }
 
@@ -53,6 +55,46 @@ public enum OpenAICompatibility {
                 "context": model.contextWindow,
                 "output": model.outputLimit
             ]
+        ]
+    }
+
+    public static func codexModelObject(_ model: ComposerModel) -> [String: Any] {
+        [
+            "slug": model.id,
+            "display_name": model.name,
+            "description": "Local Composer model served by \(CursorAPIBrand.displayName).",
+            "default_reasoning_level": NSNull(),
+            "supported_reasoning_levels": [],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": model.id == "composer-2.5" ? 10 : 9,
+            "additional_speed_tiers": [],
+            "service_tiers": [],
+            "default_service_tier": NSNull(),
+            "availability_nux": NSNull(),
+            "upgrade": NSNull(),
+            "base_instructions": "",
+            "model_messages": NSNull(),
+            "supports_reasoning_summaries": false,
+            "default_reasoning_summary": "auto",
+            "support_verbosity": false,
+            "default_verbosity": NSNull(),
+            "apply_patch_tool_type": NSNull(),
+            "web_search_tool_type": "text",
+            "truncation_policy": [
+                "mode": "tokens",
+                "limit": model.contextWindow
+            ],
+            "supports_parallel_tool_calls": true,
+            "supports_image_detail_original": false,
+            "context_window": model.contextWindow,
+            "max_context_window": model.contextWindow,
+            "auto_compact_token_limit": Int(Double(model.contextWindow) * 0.9),
+            "effective_context_window_percent": 90,
+            "experimental_supported_tools": [],
+            "input_modalities": ["text"],
+            "supports_search_tool": false
         ]
     }
 
@@ -106,6 +148,7 @@ public enum OpenAICompatibility {
             cursorModelID: model,
             prompt: prompt,
             stream: raw["stream"] as? Bool == true,
+            streamIncludeUsage: streamIncludeUsage(raw),
             promptCharacters: prompt.count,
             tools: tools,
             sessionKey: nil,
@@ -137,6 +180,7 @@ public enum OpenAICompatibility {
             cursorModelID: model,
             prompt: joined,
             stream: raw["stream"] as? Bool == true,
+            streamIncludeUsage: streamIncludeUsage(raw),
             promptCharacters: joined.count,
             tools: [],
             sessionKey: nil,
@@ -178,6 +222,7 @@ public enum OpenAICompatibility {
             cursorModelID: model,
             prompt: prompt,
             stream: false,
+            streamIncludeUsage: false,
             promptCharacters: prompt.count,
             tools: [],
             sessionKey: nil,
@@ -223,6 +268,7 @@ public enum OpenAICompatibility {
             cursorModelID: model,
             prompt: prompt,
             stream: raw["stream"] as? Bool == true,
+            streamIncludeUsage: streamIncludeUsage(raw),
             promptCharacters: prompt.count,
             tools: tools,
             sessionKey: nil,
@@ -394,6 +440,9 @@ public enum OpenAICompatibility {
             data.append(chatCompletionStreamToolCall(id: id, created: created, prepared: prepared, toolCall: toolCall, index: index))
         }
         data.append(chatCompletionStreamFinish(id: id, created: created, model: prepared.model, emittedToolCallCount: output.toolCalls.count))
+        if prepared.streamIncludeUsage {
+            data.append(chatCompletionStreamUsage(id: id, created: created, prepared: prepared, output: output))
+        }
         data.append(chatCompletionStreamDone())
         return data
     }
@@ -451,6 +500,18 @@ public enum OpenAICompatibility {
             "model": model,
             "system_fingerprint": NSNull(),
             "choices": [["index": 0, "delta": [:], "logprobs": NSNull(), "finish_reason": emittedToolCallCount == 0 ? "stop" : "tool_calls"]]
+        ])
+    }
+
+    public static func chatCompletionStreamUsage(id: String, created: Int, prepared: PreparedChatRequest, output: CursorSDKOutput) -> Data {
+        sse([
+            "id": id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": prepared.model,
+            "system_fingerprint": NSNull(),
+            "choices": [],
+            "usage": usage(promptCharacters: prepared.promptCharacters, completionCharacters: output.text.count + serializedLength(output.toolCalls.map(\.arguments)))
         ])
     }
 
@@ -698,6 +759,13 @@ public enum OpenAICompatibility {
             throw CursorAPIError.badRequest("Request body must be a JSON object.")
         }
         return record
+    }
+
+    private static func streamIncludeUsage(_ raw: [String: Any]) -> Bool {
+        guard let options = raw["stream_options"] as? [String: Any] else {
+            return false
+        }
+        return options["include_usage"] as? Bool == true
     }
 
     private static func contentText(_ value: Any?, role: String) -> String {

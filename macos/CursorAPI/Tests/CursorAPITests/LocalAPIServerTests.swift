@@ -282,9 +282,20 @@ final class LocalAPIServerTests: XCTestCase {
 
         let (data, response) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/models")!)
         XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let dataModels = try XCTUnwrap(object["data"] as? [[String: Any]])
+        let codexModels = try XCTUnwrap(object["models"] as? [[String: Any]])
         let text = String(data: data, encoding: .utf8) ?? ""
         XCTAssertTrue(text.contains("composer-2.5"))
         XCTAssertTrue(text.contains("composer-2.5-fast"))
+        XCTAssertEqual(dataModels.compactMap { $0["id"] as? String }, ["composer-2.5", "composer-2.5-fast"])
+        XCTAssertEqual(codexModels.compactMap { $0["slug"] as? String }, ["composer-2.5", "composer-2.5-fast"])
+        XCTAssertEqual(codexModels.first?["display_name"] as? String, "Composer 2.5")
+        XCTAssertEqual(codexModels.first?["shell_type"] as? String, "shell_command")
+        XCTAssertEqual(codexModels.first?["visibility"] as? String, "list")
+        XCTAssertEqual(codexModels.first?["supported_in_api"] as? Bool, true)
+        XCTAssertEqual(codexModels.first?["context_window"] as? Int, 200_000)
+        XCTAssertNotNil(codexModels.first?["truncation_policy"] as? [String: Any])
     }
 
     func testHeadReadEndpointsReturnStatusWithoutBody() async throws {
@@ -1578,6 +1589,30 @@ final class LocalAPIServerTests: XCTestCase {
 
         XCTAssertNotNil(firstContentLine)
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.8)
+    }
+
+    func testChatCompletionsStreamingIncludesUsageWhenRequested() async throws {
+        let port = try unusedTCPPort()
+        let server = LocalAPIServer(settingsProvider: { CursorAPISettings(port: port) }, harness: MockHarness(events: [
+            .text("ok"),
+            .done(CursorSDKOutput(text: "ok", agentID: "agent-test", runID: "run-test"))
+        ]))
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.httpBody = Data(#"{"model":"composer-2.5","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hello"}]}"#.utf8)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let text = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(text.contains(#""content":"ok""#))
+        XCTAssertTrue(text.contains(#""choices":[]"#))
+        XCTAssertTrue(text.contains(#""usage":"#))
+        XCTAssertTrue(text.contains("data: [DONE]"))
     }
 
     func testResponsesStreamingUsesResponsesEvents() async throws {

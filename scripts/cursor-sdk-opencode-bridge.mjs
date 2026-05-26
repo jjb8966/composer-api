@@ -147,7 +147,14 @@ async function proxySdkRun(response, input) {
             request.end();
             continue;
           }
+          const turnEnded = decodeTurnEndedEvent(frame.payload);
           response.write(frame.raw);
+          if (turnEnded) {
+            request.close(http2.constants.NGHTTP2_CANCEL);
+            response.end();
+            finish();
+            return;
+          }
         }
       });
 
@@ -253,6 +260,18 @@ function decodeRequestContextEvent(payload) {
     return null;
   }
   return null;
+}
+
+function decodeTurnEndedEvent(payload) {
+  try {
+    for (const field of decodeProtobufFields(payload)) {
+      if (field.no !== 1 || !(field.value instanceof Uint8Array)) continue;
+      if (decodeProtobufFields(field.value).some((item) => item.no === 14)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 function encodeAgentClientRequestContextResult(input) {

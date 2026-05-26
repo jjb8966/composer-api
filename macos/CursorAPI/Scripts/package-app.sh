@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPOSITORY_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
 BUILD_DIR="$ROOT_DIR/.build/release"
 APP_NAME="API for Cursor"
 EXECUTABLE_NAME="$APP_NAME"
@@ -15,6 +16,7 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICONSET_DIR="$RESOURCES_DIR/APIForCursor.iconset"
 APP_ICON_SOURCE="$ROOT_DIR/Sources/CursorAPI/Resources/APIForCursor.png"
+BRIDGE_SCRIPT_SOURCE="$REPOSITORY_DIR/scripts/cursor-sdk-opencode-bridge.mjs"
 REQUIRE_BUNDLED_TRANSPORT="${CURSOR_API_REQUIRE_BUNDLED_TRANSPORT:-0}"
 
 while [ "$#" -gt 0 ]; do
@@ -56,6 +58,8 @@ if [ -d "$BUILD_DIR/CursorAPI_CursorAPI.bundle" ]; then
 fi
 [ -s "$APP_ICON_SOURCE" ] || { echo "Missing app icon source at $APP_ICON_SOURCE" >&2; exit 1; }
 cp "$APP_ICON_SOURCE" "$RESOURCES_DIR/APIForCursor.png"
+[ -s "$BRIDGE_SCRIPT_SOURCE" ] || { echo "Missing SDK bridge script at $BRIDGE_SCRIPT_SOURCE" >&2; exit 1; }
+cp "$BRIDGE_SCRIPT_SOURCE" "$RESOURCES_DIR/cursor-sdk-opencode-bridge.mjs"
 swift - "$RESOURCES_DIR" "$ROOT_DIR" <<'SWIFT'
 import Foundation
 import Darwin

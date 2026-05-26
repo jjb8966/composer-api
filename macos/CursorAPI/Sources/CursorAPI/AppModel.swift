@@ -90,6 +90,14 @@ final class CursorAPIAppModel: ObservableObject {
         hasCursorAPIKey && sdkConfigured && !isCheckingSDK
     }
 
+    var sdkCheckNeedsAPIKeyAction: Bool {
+        guard case .failure(let message) = sdkCheckState else {
+            return false
+        }
+        return message == (CursorAPIError.unauthorized.errorDescription ?? "")
+            || message.localizedCaseInsensitiveContains("authorization")
+    }
+
     var pendingIntegrationInstallCount: Int {
         integrations.filter { $0.canInstall && !$0.installed }.count
     }

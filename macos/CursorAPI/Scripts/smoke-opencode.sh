@@ -51,10 +51,10 @@ fail() {
 }
 
 cleanup() {
-  for file in "${TEMP_FILES[@]}"; do
+  for file in "${TEMP_FILES[@]+"${TEMP_FILES[@]}"}"; do
     rm -f "$file"
   done
-  for dir in "${TEMP_DIRS[@]}"; do
+  for dir in "${TEMP_DIRS[@]+"${TEMP_DIRS[@]}"}"; do
     rm -rf "$dir"
   done
   osascript -e 'tell application id "ai.standardagents.cursorapi" to quit' >/dev/null 2>&1 || true
@@ -66,7 +66,7 @@ if ! command -v opencode >/dev/null 2>&1; then
   exit 0
 fi
 
-smoke_output="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-opencode-app.XXXXXX.log")"
+smoke_output="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-opencode-app.XXXXXX")"
 TEMP_FILES+=("$smoke_output")
 
 "$ROOT_DIR/Scripts/smoke-app.sh" --app "$APP_PATH" --require-server --keep-running --timeout "$TIMEOUT_SECONDS" >"$smoke_output"
@@ -115,7 +115,7 @@ grep -F "cursorapi/composer-2.5" <<<"$models_output" >/dev/null || fail "OpenCod
 grep -F "cursorapi/composer-2.5-fast" <<<"$models_output" >/dev/null || fail "OpenCode did not list composer-2.5-fast"
 
 if [ "$status" = "needs_unlock" ]; then
-  run_output="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-opencode-run.XXXXXX.log")"
+  run_output="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-opencode-run.XXXXXX")"
   TEMP_FILES+=("$run_output")
   (
     cd "$temp_project"

@@ -178,6 +178,11 @@ public final class CursorSDKHTTP2Transport: NSObject, URLSessionDataDelegate, UR
                     finish(taskIdentifier: dataTask.taskIdentifier, result: .failure(error))
                 }
             }
+            if CursorSDKStreamMarkers.hasTurnEnded(payload) {
+                let data = state.lock.withLock { state.responseData }
+                finish(taskIdentifier: dataTask.taskIdentifier, result: .success(data), cancelTask: true)
+                return
+            }
         }
     }
 
@@ -223,7 +228,7 @@ public final class CursorSDKHTTP2Transport: NSObject, URLSessionDataDelegate, UR
         }
     }
 
-    private func finish(taskIdentifier: Int, result: Result<Data, any Error>) {
+    private func finish(taskIdentifier: Int, result: Result<Data, any Error>, cancelTask: Bool = false) {
         guard let state = statesLock.withLock({ states[taskIdentifier] }) else {
             return
         }
@@ -239,6 +244,9 @@ public final class CursorSDKHTTP2Transport: NSObject, URLSessionDataDelegate, UR
             states[taskIdentifier] = nil
         }
         state.closeStreams()
+        if cancelTask {
+            state.task?.cancel()
+        }
         switch result {
         case .success(let data):
             continuation?.resume(returning: data)
@@ -264,6 +272,22 @@ struct CursorSDKRequestContext: Equatable {
             }
         }
         return nil
+    }
+}
+
+struct CursorSDKStreamMarkers {
+    static func hasTurnEnded(_ payload: Data) -> Bool {
+        for field in Proto.decodeFields(payload) {
+            guard field.number == 1, case .bytes(let interactionUpdate) = field.value else {
+                continue
+            }
+            if Proto.decodeFields(interactionUpdate).contains(where: { nested in
+                nested.number == 14
+            }) {
+                return true
+            }
+        }
+        return false
     }
 }
 

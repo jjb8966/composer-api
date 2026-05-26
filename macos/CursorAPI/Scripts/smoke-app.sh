@@ -83,7 +83,7 @@ ICON_HEIGHT="$(sips -g pixelHeight "$ICON_PATH" 2>/dev/null | awk '/pixelHeight:
 [ "$ICON_HEIGHT" = "1024" ] || fail "app icon height is $ICON_HEIGHT, expected 1024"
 
 cleanup() {
-  for file in "${TEMP_FILES[@]}"; do
+  for file in "${TEMP_FILES[@]+"${TEMP_FILES[@]}"}"; do
     rm -f "$file"
   done
   if [ "$KEEP_RUNNING" -eq 0 ]; then
@@ -213,7 +213,7 @@ guard standardDeviation > 4.0, buckets.count >= 8 else {
 SWIFT
 }
 
-screenshot_file="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-window.XXXXXX.png")"
+screenshot_file="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-window.XXXXXX")"
 TEMP_FILES+=("$screenshot_file")
 screencapture -x -l "$WINDOW_ID" "$screenshot_file" >/dev/null 2>&1 || fail "could not capture main window"
 verify_window_pixels "$screenshot_file" || fail "main window screenshot appears blank"
@@ -272,7 +272,7 @@ validate_health() {
   [ "$base_url" = "http://127.0.0.1:$port/v1" ] || return 1
 }
 
-health_file="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-health.XXXXXX.json")"
+health_file="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-health.XXXXXX")"
 TEMP_FILES+=("$health_file")
 
 health_found=0

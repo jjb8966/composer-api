@@ -31,4 +31,19 @@ final class ProtobufTests: XCTestCase {
         let serverLikeFrame = Proto.message([Proto.messageField(2, execMessage)])
         XCTAssertEqual(CursorSDKRequestContext.decode(serverLikeFrame), CursorSDKRequestContext(id: 42, execID: "exec-1"))
     }
+
+    func testLocalHarnessUsesSDKRunIDPrefix() {
+        let runID = LocalCursorSDKHarness.newRunID()
+        XCTAssertTrue(runID.hasPrefix("run-"))
+        XCTAssertFalse(runID.hasPrefix("msg-"))
+    }
+
+    func testDetectsSDKTurnEndedMarker() {
+        let turnEnded = Proto.message([Proto.varintField(2, 1)])
+        let interaction = Proto.message([Proto.messageField(14, turnEnded)])
+        let frame = Proto.message([Proto.messageField(1, interaction)])
+
+        XCTAssertTrue(CursorSDKStreamMarkers.hasTurnEnded(frame))
+        XCTAssertFalse(CursorSDKStreamMarkers.hasTurnEnded(Proto.message([Proto.messageField(1, Proto.message([]))])))
+    }
 }

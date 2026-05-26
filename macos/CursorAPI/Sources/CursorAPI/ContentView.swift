@@ -5,6 +5,7 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var model: CursorAPIAppModel
     @State private var topPage: TopPage = .connection
+    @State private var apiKeyReplacementRequestID = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -76,7 +77,10 @@ struct ContentView: View {
     private var connectionPane: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionTitle("Local API")
-            ConnectionPage(model: model)
+            ConnectionPage(model: model) {
+                topPage = .settings
+                apiKeyReplacementRequestID += 1
+            }
             integrationsSection
         }
     }
@@ -84,7 +88,7 @@ struct ContentView: View {
     private var settingsPane: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionTitle("Settings")
-            SettingsPage(model: model)
+            SettingsPage(model: model, apiKeyReplacementRequestID: apiKeyReplacementRequestID)
         }
     }
 
@@ -360,8 +364,12 @@ struct APIKeyRequiredPanel: View {
     @State private var draftKey = ""
     @FocusState private var keyFieldFocused: Bool
 
+    private var trimmedDraftKey: String {
+        draftKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var canSaveKey: Bool {
-        !draftKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        trimmedDraftKey.count >= 16
     }
 
     var body: some View {
@@ -383,7 +391,7 @@ struct APIKeyRequiredPanel: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($keyFieldFocused)
                 PillActionButton(model.sdkConfigured ? "Save & Start" : "Save Key") {
-                    model.settings.cursorAPIKey = draftKey
+                    model.settings.cursorAPIKey = trimmedDraftKey
                     model.saveKeyAndStartIfReady()
                     draftKey = ""
                     keyFieldFocused = false
@@ -461,6 +469,7 @@ struct TransportSetupPanel: View {
 
 struct ConnectionPage: View {
     @ObservedObject var model: CursorAPIAppModel
+    var editAPIKey: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -504,7 +513,7 @@ struct ConnectionPage: View {
             }
 
             if model.hasCursorAPIKey && !model.needsKeychainPermission {
-                SDKConnectivityPanel(model: model)
+                SDKConnectivityPanel(model: model, editAPIKey: editAPIKey)
             }
         }
     }
@@ -637,6 +646,7 @@ struct APIRequestRow: View {
 
 struct SDKConnectivityPanel: View {
     @ObservedObject var model: CursorAPIAppModel
+    var editAPIKey: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -665,10 +675,16 @@ struct SDKConnectivityPanel: View {
 
             Spacer()
 
-            PillActionButton(model.isCheckingSDK ? "Checking" : "Check Composer") {
-                model.checkSDKConnectivity()
+            if model.sdkCheckNeedsAPIKeyAction {
+                PillActionButton("Fix API Key") {
+                    editAPIKey()
+                }
+            } else {
+                PillActionButton(model.isCheckingSDK ? "Checking" : "Check Composer") {
+                    model.checkSDKConnectivity()
+                }
+                .disabled(!model.canCheckSDK)
             }
-            .disabled(!model.canCheckSDK)
         }
         .padding(12)
         .background(AppTheme.controlBackground)
@@ -730,6 +746,7 @@ struct SDKConnectivityPanel: View {
 
 struct SettingsPage: View {
     @ObservedObject var model: CursorAPIAppModel
+    var apiKeyReplacementRequestID: Int
     @State private var showsAdvancedTransport = false
 
     var body: some View {
@@ -757,7 +774,7 @@ struct SettingsPage: View {
 
             SettingsGroup(title: "Credentials", icon: "key.fill") {
                 SettingsFieldRow(title: "Cursor API Key", subtitle: "Stored locally in Keychain") {
-                    APIKeySettingsControl(model: model)
+                    APIKeySettingsControl(model: model, replacementRequestID: apiKeyReplacementRequestID)
                 }
             }
 
@@ -787,57 +804,69 @@ struct SettingsPage: View {
 
 struct APIKeySettingsControl: View {
     @ObservedObject var model: CursorAPIAppModel
+    var replacementRequestID: Int
     @State private var isReplacing = false
     @State private var draftKey = ""
     @FocusState private var keyFieldFocused: Bool
 
+    private var trimmedDraftKey: String {
+        draftKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var canSaveDraft: Bool {
-        !draftKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        trimmedDraftKey.count >= 16
     }
 
     var body: some View {
-        if model.hasCursorAPIKey && !isReplacing {
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Using saved key")
-                    Text("Read from Keychain only when starting the local API")
-                        .font(.caption)
+        Group {
+            if model.hasCursorAPIKey && !isReplacing {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Using saved key")
+                        Text("Read from Keychain only when starting the local API")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    PillActionButton("Replace Key") {
+                        draftKey = ""
+                        isReplacing = true
+                        keyFieldFocused = true
+                    }
                 }
-                Spacer()
-                PillActionButton("Replace Key") {
-                    draftKey = ""
-                    isReplacing = true
-                    keyFieldFocused = true
-                }
-            }
-        } else {
-            HStack(spacing: 8) {
-                SecureField("crsr_...", text: $draftKey)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($keyFieldFocused)
-                PillActionButton(model.hasCursorAPIKey ? "Save Key" : "Add Key") {
-                    model.settings.cursorAPIKey = draftKey
-                    model.saveSettings()
-                    draftKey = ""
-                    isReplacing = false
-                    keyFieldFocused = false
-                }
-                .disabled(!canSaveDraft)
-
-                if model.hasCursorAPIKey {
-                    PillActionButton("Cancel") {
+            } else {
+                HStack(spacing: 8) {
+                    SecureField("crsr_...", text: $draftKey)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($keyFieldFocused)
+                    PillActionButton(model.hasCursorAPIKey ? "Save Key" : "Add Key") {
+                        model.settings.cursorAPIKey = trimmedDraftKey
+                        model.saveSettings()
                         draftKey = ""
                         isReplacing = false
                         keyFieldFocused = false
                     }
+                    .disabled(!canSaveDraft)
+
+                    if model.hasCursorAPIKey {
+                        PillActionButton("Cancel") {
+                            draftKey = ""
+                            isReplacing = false
+                            keyFieldFocused = false
+                        }
+                    }
+                }
+                .onAppear {
+                    keyFieldFocused = true
                 }
             }
-            .onAppear {
-                keyFieldFocused = true
-            }
+        }
+        .onChange(of: replacementRequestID) { _, _ in
+            draftKey = ""
+            isReplacing = true
+            keyFieldFocused = true
         }
     }
 }
@@ -1041,7 +1070,7 @@ struct SettingsView: View {
     @ObservedObject var model: CursorAPIAppModel
 
     var body: some View {
-        SettingsPage(model: model)
+        SettingsPage(model: model, apiKeyReplacementRequestID: 0)
         .padding(24)
     }
 }
