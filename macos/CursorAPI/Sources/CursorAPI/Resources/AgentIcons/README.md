@@ -6,4 +6,5 @@ Integration icons are bundled so API for Cursor can render them offline.
 - `cline.png`: Cline extension icon from `cline/cline`
 - `kilo.png`: Kilo Code extension icon from `Kilo-Org/kilocode`
 - `pi.png`: pi.dev favicon
+- `continue.png`: Continue extension icon from `continuedev/continue`
 - `../cursor-logo.png`: Cursor logo from the repository's public Cursor asset

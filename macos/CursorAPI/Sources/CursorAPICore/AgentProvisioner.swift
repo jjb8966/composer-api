@@ -2,6 +2,8 @@ import Foundation
 
 public final class AgentProvisioner: @unchecked Sendable {
     private static let backupMarker = "api-for-cursor-backup"
+    private static let continueBlockStart = "# api-for-cursor-start"
+    private static let continueBlockEnd = "# api-for-cursor-end"
 
     private let homeDirectory: URL
     private let fileManager: FileManager
@@ -35,6 +37,8 @@ public final class AgentProvisioner: @unchecked Sendable {
             return extensionStatus(id: .kilo, settings: settings)
         case .pi:
             return piStatus(settings: settings)
+        case .continueDev:
+            return continueStatus(settings: settings)
         }
     }
 
@@ -52,6 +56,8 @@ public final class AgentProvisioner: @unchecked Sendable {
             try installKilo(settings: settings)
         case .pi:
             try installPi(settings: settings)
+        case .continueDev:
+            try installContinue(settings: settings)
         }
     }
 
@@ -199,6 +205,19 @@ public final class AgentProvisioner: @unchecked Sendable {
         return AgentIntegrationStatus(id: .pi, installed: installed, configPath: url.path, detail: detail)
     }
 
+    private func continueStatus(settings: CursorAPISettings) -> AgentIntegrationStatus {
+        let url = continueConfigURL()
+        guard fileManager.fileExists(atPath: url.path) else {
+            return AgentIntegrationStatus(id: .continueDev, installed: false, configPath: url.path, detail: "Continue config not found")
+        }
+        let text = fileText(url)
+        let installed = continueConfigMatches(text, settings: settings)
+        let detail = installed
+            ? "Composer models installed"
+            : (text.contains(Self.continueBlockStart) ? "Provider found with a different local URL" : providerStatusDetail(text: text, settings: settings))
+        return AgentIntegrationStatus(id: .continueDev, installed: installed, configPath: url.path, detail: detail)
+    }
+
     private func codexConfigMatches(_ text: String, settings: CursorAPISettings) -> Bool {
         text.contains("[model_providers.cursorapi]")
             && text.contains("name = \"\(CursorAPIBrand.displayName)\"")
@@ -288,6 +307,18 @@ public final class AgentProvisioner: @unchecked Sendable {
         }
     }
 
+    private func continueConfigMatches(_ text: String, settings: CursorAPISettings) -> Bool {
+        text.contains(Self.continueBlockStart)
+            && text.contains(Self.continueBlockEnd)
+            && text.contains("provider: openai")
+            && text.contains("apiBase: \(settings.baseURL.absoluteString)")
+            && text.contains("apiKey: cursor-local")
+            && ComposerModels.all.allSatisfy { model in
+                text.contains("name: \(model.name)")
+                    && text.contains("model: \(model.id)")
+            }
+    }
+
     private func installCline(settings: CursorAPISettings) throws {
         let globalStateURL = clineGlobalStateURL()
         var globalState = try readJSONObject(globalStateURL, defaultValue: [:])
@@ -366,6 +397,31 @@ public final class AgentProvisioner: @unchecked Sendable {
         try writeJSONObject(root, to: url)
     }
 
+    private func installContinue(settings: CursorAPISettings) throws {
+        let url = continueConfigURL()
+        var text = removeMarkedContinueBlock(from: fileText(url))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let blockLines = continueModelsBlock(settings: settings).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if let modelsIndex = lines.firstIndex(where: { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed == "models:" && !line.hasPrefix(" ") && !line.hasPrefix("\t")
+        }) {
+            lines.insert(contentsOf: blockLines, at: modelsIndex + 1)
+            text = lines.joined(separator: "\n")
+        } else {
+            if !text.isEmpty {
+                text += "\n\n"
+            }
+            text += "models:\n"
+            text += continueModelsBlock(settings: settings)
+        }
+        if !text.hasSuffix("\n") {
+            text += "\n"
+        }
+        try writeText(text, to: url)
+    }
+
     private func opencodeConfigURL() -> URL {
         configHomeDirectory().appending(path: "opencode/opencode.json")
     }
@@ -422,6 +478,10 @@ public final class AgentProvisioner: @unchecked Sendable {
         homeDirectory.appending(path: ".pi/agent/models.json")
     }
 
+    private func continueConfigURL() -> URL {
+        homeDirectory.appending(path: ".continue/config.yaml")
+    }
+
     private func configHomeDirectory() -> URL {
         if let value = environment["XDG_CONFIG_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !value.isEmpty,
@@ -473,6 +533,50 @@ public final class AgentProvisioner: @unchecked Sendable {
                 "output": model.outputLimit
             ]
         ]
+    }
+
+    private func continueModelsBlock(settings: CursorAPISettings) -> String {
+        var lines = [
+            "  \(Self.continueBlockStart)"
+        ]
+        for model in ComposerModels.all {
+            lines.append(contentsOf: [
+                "  - name: \(model.name)",
+                "    provider: openai",
+                "    model: \(model.id)",
+                "    apiBase: \(settings.baseURL.absoluteString)",
+                "    apiKey: cursor-local",
+                "    roles:",
+                "      - chat",
+                "      - edit",
+                "      - apply",
+                "    capabilities:",
+                "      - tool_use",
+                "      - image_input"
+            ])
+        }
+        lines.append("  \(Self.continueBlockEnd)")
+        return lines.joined(separator: "\n")
+    }
+
+    private func removeMarkedContinueBlock(from text: String) -> String {
+        var output: [String] = []
+        var skipping = false
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == Self.continueBlockStart {
+                skipping = true
+                continue
+            }
+            if trimmed == Self.continueBlockEnd {
+                skipping = false
+                continue
+            }
+            if !skipping {
+                output.append(line)
+            }
+        }
+        return output.joined(separator: "\n")
     }
 
     private func localProviderMatches(_ provider: [String: Any], settings: CursorAPISettings) -> Bool {

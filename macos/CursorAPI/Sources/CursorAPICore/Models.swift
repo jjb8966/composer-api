@@ -248,6 +248,7 @@ public enum AgentIntegrationID: String, CaseIterable, Codable, Sendable {
     case cline
     case kilo
     case pi
+    case continueDev = "continue"
 
     public var displayName: String {
         switch self {
@@ -263,6 +264,8 @@ public enum AgentIntegrationID: String, CaseIterable, Codable, Sendable {
             return "Kilo Code"
         case .pi:
             return "pi"
+        case .continueDev:
+            return "Continue"
         }
     }
 }

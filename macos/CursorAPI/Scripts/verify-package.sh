@@ -49,7 +49,8 @@ for resource in \
   vscode.png vscode-dark.png \
   cline.png cline-dark.png \
   kilo.png kilo-dark.png \
-  pi.png pi-dark.png
+  pi.png pi-dark.png \
+  continue.png continue-dark.png
 do
   [ -s "$BUNDLE_DIR/$resource" ] || fail "resource bundle is missing $resource"
 done

@@ -1179,6 +1179,8 @@ private extension AgentIntegrationID {
             return "kilo"
         case .pi:
             return "pi"
+        case .continueDev:
+            return "continue"
         }
     }
 

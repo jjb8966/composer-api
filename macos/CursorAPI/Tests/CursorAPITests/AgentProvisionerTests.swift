@@ -143,6 +143,43 @@ final class AgentProvisionerTests: XCTestCase {
         XCTAssertTrue(provisioner.status(for: .pi, settings: settings).installed)
     }
 
+    func testInstallsContinueModelsInExistingConfig() throws {
+        let home = try temporaryHome()
+        let provisioner = AgentProvisioner(homeDirectory: home)
+        let settings = CursorAPISettings(port: 8787)
+        let config = home.appending(path: ".continue/config.yaml")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        name: Existing Continue Config
+        version: 1.0.0
+        models:
+          - name: Other Local Model
+            provider: openai
+            model: other-model
+            apiBase: http://localhost:1234/v1
+            apiKey: other
+        context:
+          - provider: code
+        """.write(to: config, atomically: true, encoding: .utf8)
+
+        try provisioner.install(.continueDev, settings: settings)
+        try provisioner.install(.continueDev, settings: settings)
+
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(text.contains("name: Existing Continue Config"))
+        XCTAssertTrue(text.contains("name: Other Local Model"))
+        XCTAssertTrue(text.contains("context:"))
+        XCTAssertTrue(text.contains("# api-for-cursor-start"))
+        XCTAssertTrue(text.contains("name: Composer 2.5"))
+        XCTAssertTrue(text.contains("model: composer-2.5-fast"))
+        XCTAssertTrue(text.contains("provider: openai"))
+        XCTAssertTrue(text.contains("apiBase: http://127.0.0.1:8787/v1"))
+        XCTAssertTrue(text.contains("apiKey: cursor-local"))
+        XCTAssertEqual(countOccurrences(of: "# api-for-cursor-start", in: text), 1)
+        XCTAssertEqual(countOccurrences(of: "# api-for-cursor-end", in: text), 1)
+        XCTAssertTrue(provisioner.status(for: .continueDev, settings: settings).installed)
+    }
+
     func testInstallsClineAndKiloProfiles() throws {
         let home = try temporaryHome()
         let provisioner = AgentProvisioner(homeDirectory: home)
@@ -345,12 +382,14 @@ final class AgentProvisionerTests: XCTestCase {
         let codex = try String(contentsOf: home.appending(path: ".codex/config.toml"), encoding: .utf8)
         let kilo = try String(contentsOf: home.appending(path: ".config/kilo/kilo.jsonc"), encoding: .utf8)
         let pi = try String(contentsOf: home.appending(path: ".pi/agent/models.json"), encoding: .utf8)
+        let continueConfig = try String(contentsOf: home.appending(path: ".continue/config.yaml"), encoding: .utf8)
 
         XCTAssertEqual(countOccurrences(of: "\"cursorapi\"", in: opencode), 1)
         XCTAssertEqual(countOccurrences(of: "[model_providers.cursorapi]", in: codex), 1)
         XCTAssertEqual(countOccurrences(of: "\"cursorapi\"", in: kilo), 1)
         XCTAssertEqual(countOccurrences(of: "\"cursorapi\"", in: pi), 1)
-        for currentConfig in [opencode, codex, kilo, pi] {
+        XCTAssertEqual(countOccurrences(of: "# api-for-cursor-start", in: continueConfig), 1)
+        for currentConfig in [opencode, codex, kilo, pi, continueConfig] {
             XCTAssertFalse(currentConfig.contains("http://127.0.0.1:8787/v1"))
             XCTAssertTrue(currentConfig.contains("http://127.0.0.1:9999/v1"))
         }
@@ -368,6 +407,7 @@ final class AgentProvisionerTests: XCTestCase {
         try provisioner.install(.cline, settings: original)
         try provisioner.install(.kilo, settings: original)
         try provisioner.install(.pi, settings: original)
+        try provisioner.install(.continueDev, settings: original)
 
         for id in AgentIntegrationID.allCases {
             let status = provisioner.status(for: id, settings: moved)
