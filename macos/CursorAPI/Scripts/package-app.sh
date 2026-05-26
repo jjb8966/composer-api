@@ -425,4 +425,5 @@ PLIST
 codesign --force --deep --sign - "$APP_DIR" >/dev/null
 rm -f "$ROOT_DIR/dist/API for Cursor.zip" "$ROOT_DIR/dist/CursorAPI.zip"
 ditto -c -k --keepParent "$APP_DIR" "$ROOT_DIR/dist/API for Cursor.zip"
+"$ROOT_DIR/Scripts/verify-package.sh" "$APP_DIR"
 echo "$APP_DIR"
