@@ -8498,6 +8498,101 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertNil(arguments["plan"])
     }
 
+    func testChatToolCallsMapSDKGenerateImageToImageToolSchema() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"generate an image"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"generate_image",
+                "parameters":{
+                  "type":"object",
+                  "additionalProperties":false,
+                  "properties":{
+                    "prompt":{"type":"string"},
+                    "filePath":{"type":"string"}
+                  },
+                  "required":["prompt"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_generate_image",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [
+                CursorToolCall(name: "generateImage", arguments: [
+                    "description": .string("A blue cube"),
+                    "filePath": .string("assets/cube.png")
+                ])
+            ], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(function["name"] as? String, "generate_image")
+        XCTAssertEqual(arguments["prompt"] as? String, "A blue cube")
+        XCTAssertEqual(arguments["filePath"] as? String, "assets/cube.png")
+        XCTAssertNil(arguments["description"])
+    }
+
+    func testChatToolCallsMapSDKRecordScreenToRecorderSchema() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"record the screen"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"record_screen",
+                "parameters":{
+                  "type":"object",
+                  "additionalProperties":false,
+                  "properties":{
+                    "action":{"type":"string","enum":["START_RECORDING","SAVE_RECORDING","DISCARD_RECORDING"]}
+                  },
+                  "required":["action"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_record_screen",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [
+                CursorToolCall(name: "recordScreen", arguments: [
+                    "mode": .string("START_RECORDING")
+                ])
+            ], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(function["name"] as? String, "record_screen")
+        XCTAssertEqual(arguments["action"] as? String, "START_RECORDING")
+        XCTAssertNil(arguments["mode"])
+    }
+
     func testChatToolResultsFeedTaskCollectionBackAsSDKTodos() throws {
         let requestData = Data(#"""
         {

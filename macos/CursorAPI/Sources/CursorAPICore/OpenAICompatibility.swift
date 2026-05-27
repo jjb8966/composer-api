@@ -1315,6 +1315,13 @@ public enum OpenAICompatibility {
             CursorToolCall(name: "createPlan", arguments: [
                 "plan": .string("<plan>"),
                 "todos": .array([.object(["content": .string("<task>"), "status": .string("pending"), "priority": .string("medium")])])
+            ]),
+            CursorToolCall(name: "generateImage", arguments: [
+                "description": .string("<image description>"),
+                "filePath": .string("assets/generated.png")
+            ]),
+            CursorToolCall(name: "recordScreen", arguments: [
+                "mode": .string("START_RECORDING")
             ])
         ]
     }
@@ -1387,7 +1394,7 @@ public enum OpenAICompatibility {
     }
 
     private static func isKnownMappedToolName(_ name: String) -> Bool {
-        let knownCanonicals = ["shell", "write", "read", "edit", "delete", "grep", "glob", "ls", "readlints", "mcp", "semsearch", "todowrite", "task", "createplan"]
+        let knownCanonicals = ["shell", "write", "read", "edit", "delete", "grep", "glob", "ls", "readlints", "mcp", "semsearch", "todowrite", "task", "createplan", "generateimage", "recordscreen"]
         let normalized = normalizedName(name)
         return knownCanonicals.contains { canonical in
             canonicalToolName(name) == canonical || toolAliases(for: canonical).map(normalizedName).contains(normalized)
@@ -1962,6 +1969,15 @@ public enum OpenAICompatibility {
                 "todos": firstArgument(in: arguments, keys: todoCollectionAliases())?.value,
                 "name": firstArgument(in: arguments, keys: ["name", "title"])?.value
             ])
+        case "generateimage":
+            return compactJSON([
+                "description": firstArgument(in: arguments, keys: imageDescriptionAliases())?.value,
+                "filePath": firstArgument(in: arguments, keys: imageOutputPathAliases())?.value
+            ])
+        case "recordscreen":
+            return compactJSON([
+                "mode": firstArgument(in: arguments, keys: screenRecordModeAliases())?.value
+            ])
         default:
             return arguments
         }
@@ -2156,7 +2172,9 @@ public enum OpenAICompatibility {
         "semsearch",
         "todowrite",
         "task",
-        "createplan"
+        "createplan",
+        "generateimage",
+        "recordscreen"
     ]
 
     private static func isKnownSDKCanonical(_ name: String) -> Bool {
@@ -2486,6 +2504,17 @@ public enum OpenAICompatibility {
             copy("name", as: ["title"])
             copy("isProject", as: ["is_project", "project"])
             copy("phases", as: ["phases"])
+        case "generateimage":
+            copyFirst(imageDescriptionAliases(), as: imageDescriptionAliases())
+            copyFirst(imageOutputPathAliases(), as: imageOutputPathAliases())
+        case "recordscreen":
+            guard let argument = firstArgument(in: arguments, keys: screenRecordModeAliases()) else { break }
+            guard let target = propertyName(matching: screenRecordModeAliases(), in: properties) else {
+                consumed.insert(argument.key)
+                break
+            }
+            output[target] = .string(normalizedScreenRecordMode(argument.value, property: target, tool: tool))
+            consumed.insert(argument.key)
         default:
             break
         }
@@ -2780,6 +2809,10 @@ public enum OpenAICompatibility {
             return firstArgument(in: source, keys: ["prompt", "instructions", "input", "query"])?.value.stringValue ?? "Run subagent task"
         case "createplan":
             return firstArgument(in: source, keys: ["plan", "overview"])?.value.stringValue ?? "Update plan"
+        case "generateimage":
+            return firstArgument(in: source, keys: imageDescriptionAliases())?.value.stringValue ?? "Generate image"
+        case "recordscreen":
+            return "Record screen"
         default:
             return "Run local tool"
         }
@@ -3841,6 +3874,8 @@ public enum OpenAICompatibility {
             candidates = ["replace", "replace_file", "replace_text", "str_replace", "search_replace", "edit", "edit_file", "update", "update_file"]
         case "delete":
             candidates = ["delete", "delete_file", "remove", "remove_file"]
+        case "recordscreen":
+            candidates = ["START_RECORDING", "start_recording", "start", "record", "record_screen"]
         default:
             candidates = [canonical]
         }
@@ -5016,6 +5051,14 @@ public enum OpenAICompatibility {
         case "createplan":
             return has(["plan", "overview", "description", "summary"])
                 || has(todoCollectionAliases())
+        case "generateimage":
+            return (toolCanonical == "generateimage" || normalizedName(tool.name).contains("image"))
+                && has(imageDescriptionAliases())
+        case "recordscreen":
+            return (toolCanonical == "recordscreen"
+                || normalizedName(tool.name).contains("recordscreen")
+                || normalizedName(tool.name).contains("screenrecord"))
+                && has(screenRecordModeAliases())
         default:
             return false
         }
@@ -5076,8 +5119,8 @@ public enum OpenAICompatibility {
 
     private static func commonArgumentAliases(_ normalizedKey: String) -> [String] {
         switch normalizedKey {
-        case "absolutepath", "relativepath", "filepath", "filename", "target", "targetpath", "targetfile", "file":
-            return pathPropertyAliases()
+        case "absolutepath", "relativepath", "filepath", "filename", "target", "targetpath", "targetfile", "file", "outputpath", "outputfile":
+            return imageOutputPathAliases()
         case "commandline", "shellcommand", "cmd", "command", "script", "code":
             return shellCommandAliases()
         case "contents", "content", "filetext", "body", "data", "value":
@@ -5096,6 +5139,8 @@ public enum OpenAICompatibility {
             return globPathAliases() + pathPropertyAliases() + ["pattern"]
         case "prompt", "instructions":
             return ["prompt", "description", "instructions", "query"]
+        case "mode", "action", "operation", "op":
+            return screenRecordModeAliases()
         case "tasks", "todo", "items":
             return todoCollectionAliases()
         case "subagenttype", "subagent", "agenttype":
@@ -5175,6 +5220,17 @@ public enum OpenAICompatibility {
             if todoCollectionAliases().map(normalizedName).contains(normalizedKey) {
                 return todoCollectionAliases()
             }
+        case "generateimage":
+            if imageDescriptionAliases().map(normalizedName).contains(normalizedKey) {
+                return imageDescriptionAliases()
+            }
+            if imageOutputPathAliases().map(normalizedName).contains(normalizedKey) {
+                return imageOutputPathAliases()
+            }
+        case "recordscreen":
+            if screenRecordModeAliases().map(normalizedName).contains(normalizedKey) {
+                return screenRecordModeAliases()
+            }
         case "semsearch":
             if semanticSearchQueryAliases().map(normalizedName).contains(normalizedKey) {
                 return semanticSearchQueryAliases()
@@ -5217,6 +5273,10 @@ public enum OpenAICompatibility {
             return "task"
         case "createplantoolcall", "createplan":
             return "createplan"
+        case "generateimagetoolcall", "generateimage", "imagegeneration", "imagegen":
+            return "generateimage"
+        case "recordscreentoolcall", "recordscreen", "screenrecord", "screenrecording":
+            return "recordscreen"
         case "callmcptool":
             return "mcp"
         default:
@@ -5254,6 +5314,10 @@ public enum OpenAICompatibility {
             return ["task", "subagent", "subagent_task"]
         case "createplan":
             return ["createPlan", "create_plan"]
+        case "generateimage":
+            return ["generateImage", "generate_image", "image_generation", "image_gen"]
+        case "recordscreen":
+            return ["recordScreen", "record_screen", "screen_record", "screen_recording"]
         default:
             return [name]
         }
@@ -5302,6 +5366,42 @@ public enum OpenAICompatibility {
             }
         }
         return value
+    }
+
+    private static func imageDescriptionAliases() -> [String] {
+        ["description", "desc", "summary", "prompt", "input", "query"]
+    }
+
+    private static func imageOutputPathAliases() -> [String] {
+        pathPropertyAliases() + ["outputPath", "output_path", "outputFile", "output_file"]
+    }
+
+    private static func screenRecordModeAliases() -> [String] {
+        ["mode", "action", "operation", "op"]
+    }
+
+    private static func normalizedScreenRecordMode(_ value: JSONValue, property: String, tool: OpenAIToolSpec) -> String {
+        let raw = value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalized = normalizedName(raw)
+        let candidates: [String]
+        switch normalized {
+        case "saverecording", "save", "stop", "stoprecording", "finish", "finishrecording":
+            candidates = ["SAVE_RECORDING", "save_recording", "save", "stop", "stop_recording"]
+        case "discardrecording", "discard", "cancel", "cancelrecording":
+            candidates = ["DISCARD_RECORDING", "discard_recording", "discard", "cancel", "cancel_recording"]
+        case "startrecording", "start", "record", "recordscreen", "screenrecord", "":
+            candidates = ["START_RECORDING", "start_recording", "start", "record", "record_screen"]
+        default:
+            candidates = [raw]
+        }
+
+        let allowed = stringEnumValues(for: property, tool: tool)
+        for candidate in candidates {
+            if let match = allowed.first(where: { normalizedName($0) == normalizedName(candidate) }) {
+                return match
+            }
+        }
+        return candidates.first ?? "START_RECORDING"
     }
 
     private static func fileContentAliases() -> [String] {

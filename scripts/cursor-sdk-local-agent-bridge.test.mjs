@@ -216,6 +216,12 @@ describe("Cursor SDK local-agent bridge", () => {
     expect(isForwardableSDKToolCall({ name: "createPlan", arguments: { status: "in_progress" } })).toBe(false);
     expect(isForwardableSDKToolCall({ name: "createPlan", arguments: { plan: "Build and verify the app" } })).toBe(true);
     expect(isForwardableSDKToolCall({ name: "createPlan", arguments: { todos: [{ content: "Build app" }] } })).toBe(true);
+
+    expect(isForwardableSDKToolCall({ name: "generateImage", arguments: { filePath: "out.png" } })).toBe(false);
+    expect(isForwardableSDKToolCall({ name: "generateImage", arguments: { description: "A blue cube" } })).toBe(true);
+
+    expect(isForwardableSDKToolCall({ name: "recordScreen", arguments: { path: "recording.mov" } })).toBe(false);
+    expect(isForwardableSDKToolCall({ name: "recordScreen", arguments: { mode: "START_RECORDING" } })).toBe(true);
   });
 
   it("normalizes local client MCP forwarding tools back to SDK tool names", () => {
@@ -300,6 +306,44 @@ describe("Cursor SDK local-agent bridge", () => {
       }
     });
     expect(isForwardableSDKToolCall(plan)).toBe(true);
+  });
+
+  it("normalizes SDK image and screen forwarding tools back to SDK tool names", () => {
+    const image = normalizeSDKToolCall({
+      type: "mcp",
+      args: {
+        providerIdentifier: "client",
+        toolName: "client_generate_image",
+        args: {
+          description: "A blue cube",
+          filePath: "assets/cube.png"
+        }
+      }
+    });
+
+    expect(image).toEqual({
+      name: "generateImage",
+      arguments: {
+        description: "A blue cube",
+        filePath: "assets/cube.png"
+      }
+    });
+    expect(isForwardableSDKToolCall(image)).toBe(true);
+
+    const screen = normalizeSDKToolCall({
+      type: "client_record_screen",
+      args: {
+        mode: "START_RECORDING"
+      }
+    });
+
+    expect(screen).toEqual({
+      name: "recordScreen",
+      arguments: {
+        mode: "START_RECORDING"
+      }
+    });
+    expect(isForwardableSDKToolCall(screen)).toBe(true);
   });
 
   it("normalizes SDK tool calls that use OpenAI-style argument keys", () => {
@@ -758,6 +802,8 @@ describe("Cursor SDK local-agent bridge", () => {
     expect(tools.some((tool) => tool.name === "client_shell")).toBe(true);
     expect(tools.some((tool) => tool.name === "client_task")).toBe(true);
     expect(tools.some((tool) => tool.name === "client_create_plan")).toBe(true);
+    expect(tools.some((tool) => tool.name === "client_generate_image")).toBe(true);
+    expect(tools.some((tool) => tool.name === "client_record_screen")).toBe(true);
     expect(tools.find((tool) => tool.name === "probe_write_file")).toMatchObject({
       description: "Writes a marker through the harness MCP server.",
       inputSchema: {
@@ -1751,6 +1797,8 @@ describe("Cursor SDK local-agent bridge", () => {
     expect(prompt).toContain("client_shell");
     expect(prompt).toContain("client_task");
     expect(prompt).toContain("client_create_plan");
+    expect(prompt).toContain("client_generate_image");
+    expect(prompt).toContain("client_record_screen");
     expect(prompt).toContain("Do not use the SDK built-in shell");
     expect(prompt).toContain("LOCAL TOOL RESULT records for your previous tool call");
   });

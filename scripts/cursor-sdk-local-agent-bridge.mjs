@@ -1360,6 +1360,31 @@ function clientMcpToolDefinitions(clientTools = []) {
         },
         additionalProperties: true
       }
+    },
+    {
+      name: "client_generate_image",
+      description: "Forward an image generation request to the outer client.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          description: { type: "string" },
+          filePath: pathProperty
+        },
+        required: ["description"],
+        additionalProperties: true
+      }
+    },
+    {
+      name: "client_record_screen",
+      description: "Forward a screen recording control request to the outer client.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          mode: { type: "string", enum: ["START_RECORDING", "SAVE_RECORDING", "DISCARD_RECORDING"] }
+        },
+        required: ["mode"],
+        additionalProperties: true
+      }
     }
   ];
   const seen = new Set(tools.map((tool) => tool.name));
@@ -1379,12 +1404,12 @@ function bridgePrompt(prompt) {
   return [
     "You are running through the real Cursor SDK local runtime behind an OpenAI-compatible client.",
     "The outer client owns local tool execution. When local work is needed, emit exactly one SDK tool call, then stop.",
-    "A local MCP server named client exposes forwarding tools: client_shell, client_write, client_read, client_edit, client_delete, client_glob, client_grep, client_ls, client_read_lints, client_sem_search, client_todo_write, client_task, and client_create_plan.",
+    "A local MCP server named client exposes forwarding tools: client_shell, client_write, client_read, client_edit, client_delete, client_glob, client_grep, client_ls, client_read_lints, client_sem_search, client_todo_write, client_task, client_create_plan, client_generate_image, and client_record_screen.",
     "The same client MCP server also exposes the current harness tools by exact tool name when the outer client provided a tool schema.",
-    "Use those client MCP forwarding tools for every local operation. Do not use the SDK built-in shell, write, edit, read, glob, grep, ls, delete, readLints, semSearch, todowrite, task, or createPlan tools because those execute inside the bridge instead of the outer client.",
+    "Use those client MCP forwarding tools for every local operation. Do not use the SDK built-in shell, write, edit, read, glob, grep, ls, delete, readLints, semSearch, todowrite, task, createPlan, generateImage, or recordScreen tools because those execute inside the bridge instead of the outer client.",
     "If the prompt below says LOCAL TOOL REQUIRED, your response must be exactly one client MCP forwarding tool call and no prose.",
     "If the prompt below contains LOCAL TOOL RESULT records for your previous tool call, treat those tools as already executed by the outer client. Continue from the result, return any requested final answer, and do not repeat the same tool call unless the result shows a failure or more local work is clearly required.",
-    "When the outer prompt says to use SDK shell, write, read, edit, delete, glob, grep, ls, readLints, semSearch, todowrite, task, or createPlan, satisfy that by calling the matching client_shell, client_write, client_read, client_edit, client_delete, client_glob, client_grep, client_ls, client_read_lints, client_sem_search, client_todo_write, client_task, or client_create_plan MCP tool.",
+    "When the outer prompt says to use SDK shell, write, read, edit, delete, glob, grep, ls, readLints, semSearch, todowrite, task, createPlan, generateImage, or recordScreen, satisfy that by calling the matching client_shell, client_write, client_read, client_edit, client_delete, client_glob, client_grep, client_ls, client_read_lints, client_sem_search, client_todo_write, client_task, client_create_plan, client_generate_image, or client_record_screen MCP tool.",
     "If the request below mentions an SDK routing map or asks for SDK mcp, satisfy that by calling the matching client MCP forwarding tool.",
     "For harness MCP tools named like mcp__server__tool or server_tool, still call the local client MCP server with toolName set to the exact harness tool name. Do not call a separate provider/server unless that exact server is exposed by the SDK runtime.",
     "For file creation, file edits, deletes, package installs, tests, builds, and project scaffolds, use client_shell or the exact harness shell tool with a complete command. Include mkdir -p for parent directories and quoted heredocs or a small script with the full intended content.",
@@ -1509,6 +1534,14 @@ function sdkToolNameFromClientMcpTool(toolName) {
       return "task";
     case "createplan":
       return "createPlan";
+    case "generateimage":
+    case "imagegeneration":
+    case "imagegen":
+      return "generateImage";
+    case "recordscreen":
+    case "screenrecord":
+    case "screenrecording":
+      return "recordScreen";
     default:
       return null;
   }
@@ -1559,6 +1592,10 @@ function isForwardableSDKToolCall(toolCall, clientTools = []) {
     case "createplan":
       return hasString(args, "plan", "overview", "name", "title", "description")
         || hasArray(args, "todos", "todoList", "todo_list", "todoItems", "todo_items", "items", "tasks", "taskList", "task_list", "phases");
+    case "generateimage":
+      return hasString(args, "description", "desc", "summary", "prompt", "input", "query");
+    case "recordscreen":
+      return hasString(args, "mode", "action", "operation", "op");
     default:
       return false;
   }
@@ -1703,6 +1740,14 @@ function mcpWrapperPayloadLooksComplete(args) {
     case "setplan":
       return hasString(payload, "plan", "overview", "name", "title", "description")
         || hasArray(payload, "todos", "todoList", "todo_list", "todoItems", "todo_items", "items", "tasks", "taskList", "task_list", "phases");
+    case "generateimage":
+    case "imagegeneration":
+    case "imagegen":
+      return hasString(payload, "description", "desc", "summary", "prompt", "input", "query");
+    case "recordscreen":
+    case "screenrecord":
+    case "screenrecording":
+      return hasString(payload, "mode", "action", "operation", "op");
     default:
       return false;
   }
