@@ -1037,15 +1037,28 @@ public enum OpenAICompatibility {
     private static func parseTools(_ value: Any?, disabled: Bool) -> [OpenAIToolSpec] {
         guard !disabled, let tools = value as? [[String: Any]] else { return [] }
         return tools.compactMap { tool in
-            guard (tool["type"] as? String) == "function" else {
+            let function = tool["function"] as? [String: Any] ?? tool
+            guard let name = stringValue(function["name"]) ?? stringValue(tool["name"]) else {
                 return nil
             }
-            let function = tool["function"] as? [String: Any] ?? tool
-            guard let name = function["name"] as? String,
-                  !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            let parameters = function["parameters"].map(JSONValue.from)
-            return OpenAIToolSpec(name: name, description: function["description"] as? String, parameters: parameters)
+            let parameters = toolParameters(from: [function, tool]).map(JSONValue.from)
+            return OpenAIToolSpec(
+                name: name,
+                description: stringValue(function["description"]) ?? stringValue(tool["description"]),
+                parameters: parameters
+            )
         }
+    }
+
+    private static func toolParameters(from records: [[String: Any]]) -> Any? {
+        for record in records {
+            for key in ["parameters", "input_schema", "inputSchema", "schema", "json_schema"] {
+                if let value = record[key], !(value is NSNull) {
+                    return value
+                }
+            }
+        }
+        return nil
     }
 
     private static func appendToolInventory(_ transcript: inout [String], tools: [OpenAIToolSpec], toolChoice: Any?) {

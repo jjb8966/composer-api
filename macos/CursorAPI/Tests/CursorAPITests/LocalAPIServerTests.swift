@@ -1337,6 +1337,39 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertTrue(prepared.prompt.contains("/tmp/project"))
     }
 
+    func testResponsesAcceptsServerToolInputSchemasAndSkipsNamelessBuiltins() throws {
+        let prepared = try OpenAICompatibility.prepareResponsesRequest(Data(#"""
+        {
+          "model": "composer-2.5",
+          "tools": [
+            { "type": "web_search_preview" },
+            {
+              "type": "server_tool",
+              "name": "repo_search",
+              "description": "Search repository symbols",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "query": { "type": "string" }
+                },
+                "required": ["query"]
+              }
+            }
+          ],
+          "input": "search the repo"
+        }
+        """#.utf8))
+
+        XCTAssertEqual(prepared.tools.map(\.name), ["repo_search"])
+        XCTAssertEqual(prepared.tools.first?.description, "Search repository symbols")
+        guard case .object(let schema)? = prepared.tools.first?.parameters,
+              case .object(let properties)? = schema["properties"] else {
+            return XCTFail("Expected server tool input schema to be preserved")
+        }
+        XCTAssertNotNil(properties["query"])
+        XCTAssertTrue(prepared.prompt.contains("Allowed tool names: repo_search"))
+    }
+
     func testChatFileRequestAddsRequiredLocalToolHint() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
@@ -1802,6 +1835,53 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(function["name"] as? String, "glob")
         XCTAssertEqual(arguments["pattern"] as? String, "**/*.tsx")
         XCTAssertEqual(arguments["path"] as? String, "/tmp/project")
+        XCTAssertNil(arguments["targetDirectory"])
+        XCTAssertNil(arguments["globPattern"])
+    }
+
+    func testChatToolCallsMapSDKGlobToBareInputSchemaTool() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"find source files"}],
+          "tools":[
+            {
+              "name":"glob",
+              "description":"Find files",
+              "input_schema":{
+                "type":"object",
+                "properties":{
+                  "pattern":{"type":"string"},
+                  "path":{"type":"string"}
+                },
+                "required":["pattern"]
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "glob", arguments: [
+            "targetDirectory": .string("src"),
+            "globPattern": .string("**/*.tsx")
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(prepared.tools.first?.description, "Find files")
+        XCTAssertEqual(function["name"] as? String, "glob")
+        XCTAssertEqual(arguments["pattern"] as? String, "**/*.tsx")
+        XCTAssertEqual(arguments["path"] as? String, "src")
         XCTAssertNil(arguments["targetDirectory"])
         XCTAssertNil(arguments["globPattern"])
     }

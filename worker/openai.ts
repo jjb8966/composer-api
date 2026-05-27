@@ -665,21 +665,40 @@ export function completionCharsFromOutput(text: string, toolCalls: OpenAiToolCal
 function parseChatTools(value: unknown): OpenAiToolSpec[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new HttpError("tools must be an array.", 400, "invalid_request_error", "tools");
-  return value.map((tool, index) => {
+  return value.flatMap((tool, index) => {
     const record = expectRecord(tool, `tools[${index}]`);
-    if (record.type !== "function") {
-      throw new HttpError("Only function tools are supported.", 400, "unsupported_parameter", `tools[${index}].type`);
-    }
+    const type = typeof record.type === "string" ? record.type.trim() : "";
     const fn = isRecord(record.function) ? record.function : record;
-    if (typeof fn.name !== "string" || !fn.name.trim()) {
+    const name = typeof fn.name === "string" && fn.name.trim()
+      ? fn.name.trim()
+      : typeof record.name === "string" && record.name.trim()
+        ? record.name.trim()
+        : "";
+    if (!name) {
+      if (type && type !== "function") return [];
       throw new HttpError("Tool function name is required.", 400, "invalid_request_error", `tools[${index}].function.name`);
     }
-    return {
-      name: fn.name.trim(),
-      ...(typeof fn.description === "string" ? { description: fn.description } : {}),
-      ...(fn.parameters !== undefined ? { parameters: fn.parameters } : {})
-    };
+    const description = typeof fn.description === "string"
+      ? fn.description
+      : typeof record.description === "string"
+        ? record.description
+        : undefined;
+    const parameters = toolParametersFrom(fn, record);
+    return [{
+      name,
+      ...(description ? { description } : {}),
+      ...(parameters !== undefined ? { parameters } : {})
+    }];
   });
+}
+
+function toolParametersFrom(...records: Record<string, unknown>[]): unknown {
+  for (const record of records) {
+    for (const key of ["parameters", "input_schema", "inputSchema", "schema", "json_schema"]) {
+      if (record[key] !== undefined) return record[key];
+    }
+  }
+  return undefined;
 }
 
 function appendChatTools(transcript: string[], tools: OpenAiToolSpec[], toolChoice: unknown) {
@@ -1551,6 +1570,9 @@ function normalizeToolArguments(args: Record<string, unknown>, tool: OpenAiToolS
   if (emittedCanonical === "ls" && selectedCanonical === "glob") {
     return listAsGlobArguments(argsToNormalize, tool);
   }
+  if (emittedCanonical === "glob" && selectedCanonical === "glob") {
+    return globArguments(argsToNormalize, tool);
+  }
 
   const normalizedProperties = new Map(schema.properties.map((property) => [normalizeToolName(property), property]));
   const output: Record<string, unknown> = {};
@@ -1749,6 +1771,18 @@ function listAsGlobArguments(args: Record<string, unknown>, tool: OpenAiToolSpec
   const patternKey = firstMatchingProperty(["pattern", "globPattern", "glob_pattern", "glob"], schema.properties, normalizedProperties);
   if (patternKey) output[patternKey] = Object.keys(args).length ? "*" : "**/*";
   const path = firstArg(args, [...pathCandidates(), "directory", "dir"]);
+  const pathKey = firstMatchingProperty(["path", "targetDirectory", "target_directory", "directory", "cwd"], schema.properties, normalizedProperties);
+  if (pathKey && shouldIncludeOptionalPath(path)) output[pathKey] = path;
+  return Object.keys(output).length ? output : args;
+}
+
+function globArguments(args: Record<string, unknown>, tool: OpenAiToolSpec | undefined): Record<string, unknown> {
+  const schema = toolParameterSchema(tool);
+  const normalizedProperties = new Map(schema.properties.map((property) => [normalizeToolName(property), property]));
+  const output: Record<string, unknown> = {};
+  const { pattern, path } = normalizedGlobArguments(args);
+  const patternKey = firstMatchingProperty(["pattern", "globPattern", "glob_pattern", "glob"], schema.properties, normalizedProperties);
+  if (patternKey) output[patternKey] = pattern || "*";
   const pathKey = firstMatchingProperty(["path", "targetDirectory", "target_directory", "directory", "cwd"], schema.properties, normalizedProperties);
   if (pathKey && shouldIncludeOptionalPath(path)) output[pathKey] = path;
   return Object.keys(output).length ? output : args;

@@ -98,6 +98,110 @@ describe("OpenAI compatibility adapter", () => {
     expect(prepared.prompt.text).toContain('"name":"glob"');
   });
 
+  it("accepts bare harness tools with input_schema and maps SDK glob arguments to that schema", () => {
+    const prepared = prepareOpencodeSdkChatRequest(
+      {
+        model: "composer-2.5-sdk",
+        messages: [{ role: "user", content: "find source files" }],
+        tools: [
+          {
+            name: "glob",
+            description: "Find files",
+            input_schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                pattern: { type: "string" },
+                path: { type: "string" }
+              },
+              required: ["pattern"]
+            }
+          }
+        ]
+      },
+      { id: "composer-2.5-sdk" }
+    );
+
+    expect(prepared.tools).toEqual([
+      {
+        name: "glob",
+        description: "Find files",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            pattern: { type: "string" },
+            path: { type: "string" }
+          },
+          required: ["pattern"]
+        }
+      }
+    ]);
+
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: prepared.tools,
+      toolCalls: [{ name: "glob", arguments: { targetDirectory: "src", globPattern: "**/*.tsx" } }]
+    });
+
+    expect(toolCalls[0].function.name).toBe("glob");
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: "**/*.tsx", path: "src" });
+  });
+
+  it("accepts server tool schemas and skips nameless built-in response tools", () => {
+    const prepared = prepareResponsesRequest(
+      {
+        model: "composer-2.5",
+        input: "search the repo",
+        tools: [
+          { type: "web_search_preview" },
+          {
+            type: "server_tool",
+            name: "repo_search",
+            description: "Search repository symbols",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string" }
+              },
+              required: ["query"]
+            }
+          }
+        ]
+      },
+      { id: "composer-2.5" }
+    );
+
+    expect(prepared.tools).toEqual([
+      {
+        name: "repo_search",
+        description: "Search repository symbols",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" }
+          },
+          required: ["query"]
+        }
+      }
+    ]);
+    expect(prepared.prompt.text).toContain("Allowed tool names: repo_search");
+    expect(prepared.responseMetadata.tools).toEqual([
+      {
+        type: "function",
+        name: "repo_search",
+        description: "Search repository symbols",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" }
+          },
+          required: ["query"]
+        }
+      }
+    ]);
+  });
+
   it("requires workspace tools for create/build style requests", () => {
     const prepared = prepareChatRequest(
       {
