@@ -501,7 +501,7 @@ function validateJsonSchemaValue(value, schema, path, rootSchema = schema, seenR
         if (error) return error;
         validated = true;
       }
-      const evaluatedByComposedSchema = schemaEvaluatesObjectProperty(schema, key, root, new Set(seenRefs));
+      const evaluatedByComposedSchema = schemaEvaluatesObjectProperty(schema, key, root, value, new Set(seenRefs));
       if (!validated && schema.additionalProperties === false) {
         return `Unexpected argument for ${path}: ${key}`;
       } else if (!validated && schema.additionalProperties === true) {
@@ -795,22 +795,28 @@ function patternPropertySchemasForKey(schema, key) {
   return output;
 }
 
-function schemaEvaluatesObjectProperty(schema, key, rootSchema, seenRefs = new Set()) {
+function schemaEvaluatesObjectProperty(schema, key, rootSchema, value, seenRefs = new Set()) {
   schema = canonicalJsonSchema(schema);
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return false;
   const reference = schemaReferenceTarget(schema, rootSchema, seenRefs);
-  if (reference) return schemaEvaluatesObjectProperty(reference.schema, key, rootSchema, reference.seenRefs);
+  if (reference) return schemaEvaluatesObjectProperty(reference.schema, key, rootSchema, value, reference.seenRefs);
   if (isRecord(schema.properties) && Object.prototype.hasOwnProperty.call(schema.properties, key)) return true;
   if (patternPropertySchemasForKey(schema, key).length > 0) return true;
   if (schema.additionalProperties === true || isRecord(schema.additionalProperties)) return true;
+  if (isRecord(schema.dependentSchemas) && isRecord(value)) {
+    for (const [dependency, dependentSchema] of Object.entries(schema.dependentSchemas)) {
+      if (!Object.prototype.hasOwnProperty.call(value, dependency)) continue;
+      if (schemaEvaluatesObjectProperty(dependentSchema, key, rootSchema, value, new Set(seenRefs))) return true;
+    }
+  }
   for (const keyword of ["allOf", "anyOf", "oneOf"]) {
     if (!Array.isArray(schema[keyword])) continue;
-    if (schema[keyword].some((candidate) => schemaEvaluatesObjectProperty(candidate, key, rootSchema, new Set(seenRefs)))) {
+    if (schema[keyword].some((candidate) => schemaEvaluatesObjectProperty(candidate, key, rootSchema, value, new Set(seenRefs)))) {
       return true;
     }
   }
   for (const keyword of ["if", "then", "else", "not"]) {
-    if (isRecord(schema[keyword]) && schemaEvaluatesObjectProperty(schema[keyword], key, rootSchema, new Set(seenRefs))) {
+    if (isRecord(schema[keyword]) && schemaEvaluatesObjectProperty(schema[keyword], key, rootSchema, value, new Set(seenRefs))) {
       return true;
     }
   }

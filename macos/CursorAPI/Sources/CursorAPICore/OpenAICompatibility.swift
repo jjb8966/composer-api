@@ -4060,7 +4060,7 @@ public enum OpenAICompatibility {
             if !validated, case .object? = schema["additionalProperties"] {
                 validated = true
             }
-            let evaluatedByComposedSchema = schemaEvaluatesObjectProperty(property, schema: schema)
+            let evaluatedByComposedSchema = schemaEvaluatesObjectProperty(property, schema: schema, objectValues: values)
             if !validated, !evaluatedByComposedSchema, schema["unevaluatedProperties"] == .bool(false) {
                 return false
             }
@@ -4074,7 +4074,12 @@ public enum OpenAICompatibility {
         return true
     }
 
-    private static func schemaEvaluatesObjectProperty(_ property: String, schema: [String: JSONValue], depth: Int = 0) -> Bool {
+    private static func schemaEvaluatesObjectProperty(
+        _ property: String,
+        schema: [String: JSONValue],
+        objectValues: [String: JSONValue]? = nil,
+        depth: Int = 0
+    ) -> Bool {
         guard depth <= 5 else { return false }
         if case .object(let properties)? = schema["properties"],
            propertyName(matching: [property], in: Array(properties.keys)) != nil {
@@ -4086,18 +4091,28 @@ public enum OpenAICompatibility {
         if schema["additionalProperties"] == .bool(true) || schema["additionalProperties"]?.objectValue != nil {
             return true
         }
+        if let objectValues,
+           case .object(let dependencies)? = schema["dependentSchemas"] {
+            for (dependency, dependentSchema) in dependencies where objectValues[dependency] != nil {
+                let nested = schemaWithInheritedDefinitions(dependentSchema, root: .object(schema))
+                if case .object(let object)? = nested,
+                   schemaEvaluatesObjectProperty(property, schema: object, objectValues: objectValues, depth: depth + 1) {
+                    return true
+                }
+            }
+        }
         let composed = composedParameterSchemas(schema["allOf"]) + composedParameterSchemas(schema["anyOf"]) + composedParameterSchemas(schema["oneOf"])
         for candidate in composed {
             let nested = schemaWithInheritedDefinitions(candidate, root: .object(schema))
             if case .object(let object)? = nested,
-               schemaEvaluatesObjectProperty(property, schema: object, depth: depth + 1) {
+               schemaEvaluatesObjectProperty(property, schema: object, objectValues: objectValues, depth: depth + 1) {
                 return true
             }
         }
         for key in ["if", "then", "else", "not"] {
             let nested = schemaWithInheritedDefinitions(schema[key], root: .object(schema))
             if case .object(let object)? = nested,
-               schemaEvaluatesObjectProperty(property, schema: object, depth: depth + 1) {
+               schemaEvaluatesObjectProperty(property, schema: object, objectValues: objectValues, depth: depth + 1) {
                 return true
             }
         }
@@ -4419,15 +4434,34 @@ public enum OpenAICompatibility {
         }
         let variants = (composedParameterSchemas(object["anyOf"]) + composedParameterSchemas(object["oneOf"]))
             .map { parameterSchemaShape($0, depth: depth + 1, root: schemaRoot, seenRefs: seenRefs) }
+        let dependent = dependentParameterSchemaShapes(object["dependentSchemas"], root: schemaRoot, depth: depth, seenRefs: seenRefs)
 
         return mergeParameterSchemaShapes(
             [
                 direct,
+                mergeParameterSchemaShapes(dependent, requiredMode: .intersection),
                 mergeParameterSchemaShapes(allOf, requiredMode: .union),
                 mergeParameterSchemaShapes(variants, requiredMode: .intersection)
             ],
             requiredMode: .union
         )
+    }
+
+    private static func dependentParameterSchemaShapes(
+        _ value: JSONValue?,
+        root: JSONValue?,
+        depth: Int,
+        seenRefs: Set<String>
+    ) -> [ParameterSchemaShape] {
+        guard depth <= 5,
+              case .object(let dependencies)? = value else {
+            return []
+        }
+        return dependencies.values.map {
+            var shape = parameterSchemaShape($0, depth: depth + 1, root: root, seenRefs: seenRefs)
+            shape.required = []
+            return shape
+        }
     }
 
     private static func emptyParameterSchemaShape() -> ParameterSchemaShape {

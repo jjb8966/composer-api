@@ -8590,6 +8590,59 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments["NODE_ENV"] as? String, "production")
     }
 
+    func testResponsesFunctionCallsEmitProviderSpecificMCPToolWhenDependentSchemasEvaluateUnevaluatedProperties() throws {
+        let prepared = try OpenAICompatibility.prepareResponsesRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "input":"run command",
+          "tools":[
+            {
+              "type":"function",
+              "name":"mcp__runner__run_command",
+              "parameters":{
+                "type":"object",
+                "properties":{
+                  "command":{"type":"string"}
+                },
+                "required":["command"],
+                "dependentSchemas":{
+                  "command":{
+                    "properties":{
+                      "cwd":{"type":"string"}
+                    },
+                    "required":["cwd"]
+                  }
+                },
+                "unevaluatedProperties":false
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "mcp", arguments: [
+            "providerIdentifier": .string("runner"),
+            "toolName": .string("run_command"),
+            "args": .object([
+                "command": .string("npm run build"),
+                "cwd": .string(".")
+            ])
+        ])
+
+        let object = OpenAICompatibility.responseObject(
+            id: "resp_mcp_dependent_evaluated",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let outputItems = try XCTUnwrap(object["output"] as? [[String: Any]])
+        let functionCall = try XCTUnwrap(outputItems.first { ($0["type"] as? String) == "function_call" })
+        XCTAssertEqual(functionCall["name"] as? String, "mcp__runner__run_command")
+        let arguments = try decodedArguments(functionCall)
+        XCTAssertEqual(arguments["command"] as? String, "npm run build")
+        XCTAssertEqual(arguments["cwd"] as? String, ".")
+    }
+
     func testResponsesFunctionCallsEmitProviderSpecificMCPToolWhenContainsEvaluatesUnevaluatedItems() throws {
         let prepared = try OpenAICompatibility.prepareResponsesRequest(Data(#"""
         {

@@ -570,6 +570,43 @@ describe("Cursor SDK local-agent bridge", () => {
     })).toBe("Invalid value for configure_env.DEBUG: expected string");
   });
 
+  it("treats dependentSchemas as evaluated for unevaluated object properties", () => {
+    const tools = clientMcpToolDefinitions([
+      {
+        name: "run_command",
+        parameters: {
+          type: "object",
+          properties: {
+            command: { type: "string" }
+          },
+          required: ["command"],
+          dependentSchemas: {
+            command: {
+              properties: {
+                cwd: { type: "string" }
+              },
+              required: ["cwd"]
+            }
+          },
+          unevaluatedProperties: false
+        }
+      }
+    ]);
+
+    expect(validateClientMcpToolCall(tools, "run_command", {
+      command: "npm run build",
+      cwd: "."
+    })).toBe(null);
+    expect(validateClientMcpToolCall(tools, "run_command", {
+      command: "npm run build"
+    })).toBe("Missing required argument for run_command: cwd");
+    expect(validateClientMcpToolCall(tools, "run_command", {
+      command: "npm run build",
+      cwd: ".",
+      debug: true
+    })).toBe("Unexpected argument for run_command: debug");
+  });
+
   it("treats contains matches as evaluated for unevaluated array items", () => {
     const tools = clientMcpToolDefinitions([
       {
