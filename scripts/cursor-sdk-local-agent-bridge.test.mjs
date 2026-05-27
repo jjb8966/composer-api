@@ -413,6 +413,42 @@ describe("Cursor SDK local-agent bridge", () => {
     expect(validateClientMcpToolCall(tools, "constrained_search", { query: "todo_app", limit: 10 })).toBe(null);
   });
 
+  it("validates dynamic client MCP pattern properties", () => {
+    const tools = clientMcpToolDefinitions([
+      {
+        name: "run_with_env",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            command: { type: "string" },
+            env: {
+              type: "object",
+              additionalProperties: false,
+              patternProperties: {
+                "^VITE_[A-Z0-9_]+$": { type: "string", minLength: 1 }
+              }
+            }
+          },
+          required: ["command", "env"]
+        }
+      }
+    ]);
+
+    expect(validateClientMcpToolCall(tools, "run_with_env", {
+      command: "npm run build",
+      env: { VITE_API_URL: "https://example.com" }
+    })).toBe(null);
+    expect(validateClientMcpToolCall(tools, "run_with_env", {
+      command: "npm run build",
+      env: { API_URL: "https://example.com" }
+    })).toBe("Unexpected argument for run_with_env.env: API_URL");
+    expect(validateClientMcpToolCall(tools, "run_with_env", {
+      command: "npm run build",
+      env: { VITE_API_URL: "" }
+    })).toBe("Invalid value for run_with_env.env.VITE_API_URL: expected at least 1 character(s)");
+  });
+
   it("validates nested dynamic client MCP schemas before accepting forwarding calls", () => {
     const tools = clientMcpToolDefinitions([
       {

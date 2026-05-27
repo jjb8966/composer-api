@@ -308,6 +308,7 @@ const schemaTypes = ${schemaTypes.toString()};
 const schemaAllowsNull = ${schemaAllowsNull.toString()};
 const validateStringConstraints = ${validateStringConstraints.toString()};
 const validateNumberConstraints = ${validateNumberConstraints.toString()};
+const patternPropertySchemasForKey = ${patternPropertySchemasForKey.toString()};
 const jsonValueMatchesType = ${jsonValueMatchesType.toString()};
 const jsonValuesEqual = ${jsonValuesEqual.toString()};
 const isRecord = ${isRecord.toString()};
@@ -411,7 +412,7 @@ function validateJsonSchemaValue(value, schema, path, rootSchema = schema, seenR
   const numberConstraintError = validateNumberConstraints(value, schema, path);
   if (numberConstraintError) return numberConstraintError;
 
-  const objectLike = schema.properties || schema.required || schema.additionalProperties !== undefined || types.includes("object");
+  const objectLike = schema.properties || schema.patternProperties || schema.required || schema.additionalProperties !== undefined || types.includes("object");
   if (objectLike) {
     if (!isRecord(value)) return `Invalid value for ${path}: expected object`;
     const properties = isRecord(schema.properties) ? schema.properties : {};
@@ -422,12 +423,21 @@ function validateJsonSchemaValue(value, schema, path, rootSchema = schema, seenR
       }
     }
     for (const [key, nestedValue] of Object.entries(value)) {
+      let validated = false;
       if (Object.prototype.hasOwnProperty.call(properties, key)) {
         const error = validateJsonSchemaValue(nestedValue, properties[key], `${path}.${key}`, root, new Set(seenRefs));
         if (error) return error;
-      } else if (schema.additionalProperties === false) {
+        validated = true;
+      }
+      const patternSchemas = patternPropertySchemasForKey(schema, key);
+      for (const patternSchema of patternSchemas) {
+        const error = validateJsonSchemaValue(nestedValue, patternSchema, `${path}.${key}`, root, new Set(seenRefs));
+        if (error) return error;
+        validated = true;
+      }
+      if (!validated && schema.additionalProperties === false) {
         return `Unexpected argument for ${path}: ${key}`;
-      } else if (isRecord(schema.additionalProperties)) {
+      } else if (!validated && isRecord(schema.additionalProperties)) {
         const error = validateJsonSchemaValue(nestedValue, schema.additionalProperties, `${path}.${key}`, root, new Set(seenRefs));
         if (error) return error;
       }
@@ -602,6 +612,18 @@ function validateNumberConstraints(value, schema, path) {
     }
   }
   return null;
+}
+
+function patternPropertySchemasForKey(schema, key) {
+  if (!isRecord(schema.patternProperties)) return [];
+  const output = [];
+  for (const [pattern, patternSchema] of Object.entries(schema.patternProperties)) {
+    if (!isRecord(patternSchema) && typeof patternSchema !== "boolean") continue;
+    try {
+      if (new RegExp(pattern).test(key)) output.push(patternSchema);
+    } catch {}
+  }
+  return output;
 }
 
 function jsonValueMatchesType(value, type) {

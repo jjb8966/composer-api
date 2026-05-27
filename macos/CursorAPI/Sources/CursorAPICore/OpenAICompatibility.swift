@@ -2421,6 +2421,9 @@ public enum OpenAICompatibility {
             if argumentValueSatisfiesSchema(output[property], schema: schema, required: true) {
                 continue
             }
+            if output[property] != nil {
+                continue
+            }
             if let copied = firstArgument(in: source, keys: [property])?.value,
                argumentValueSatisfiesSchema(copied, schema: schema, required: true) {
                 output[property] = normalizeToolArgumentValue(copied, property: property, tool: tool, context: context)
@@ -3851,7 +3854,10 @@ public enum OpenAICompatibility {
     }
 
     private static func objectConstraintsApply(_ schema: [String: JSONValue], value: JSONValue, types: [String]) -> Bool {
-        guard schema["properties"] != nil || schema["required"] != nil || schema["additionalProperties"] != nil else {
+        guard schema["properties"] != nil
+            || schema["patternProperties"] != nil
+            || schema["required"] != nil
+            || schema["additionalProperties"] != nil else {
             return false
         }
         if jsonValue(value, matchesType: "object") {
@@ -3883,23 +3889,49 @@ public enum OpenAICompatibility {
             }
         }
         for (property, nestedValue) in values {
+            var validated = false
             if let propertyName = propertyName(matching: [property], in: propertyOrder),
                let propertySchema = properties[propertyName] {
                 let nestedSchema = schemaWithInheritedDefinitions(propertySchema, root: .object(schema))
                 if !argumentValueSatisfiesSchema(nestedValue, schema: nestedSchema, required: false) {
                     return false
                 }
-                continue
+                validated = true
             }
-            if schema["additionalProperties"] == .bool(false) {
+            let patternSchemas = patternPropertySchemas(for: property, schema: schema)
+            for patternSchema in patternSchemas {
+                let nestedSchema = schemaWithInheritedDefinitions(patternSchema, root: .object(schema))
+                if !argumentValueSatisfiesSchema(nestedValue, schema: nestedSchema, required: false) {
+                    return false
+                }
+                validated = true
+            }
+            if !validated, schema["additionalProperties"] == .bool(false) {
                 return false
             }
-            if case .object? = schema["additionalProperties"],
+            if !validated,
+               case .object? = schema["additionalProperties"],
                !argumentValueSatisfiesSchema(nestedValue, schema: schema["additionalProperties"], required: false) {
                 return false
             }
         }
         return true
+    }
+
+    private static func patternPropertySchemas(for property: String, schema: [String: JSONValue]) -> [JSONValue] {
+        guard case .object(let patternProperties)? = schema["patternProperties"] else {
+            return []
+        }
+        return patternProperties.compactMap { pattern, nestedSchema in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else {
+                return nil
+            }
+            let range = NSRange(property.startIndex..<property.endIndex, in: property)
+            guard regex.firstMatch(in: property, range: range) != nil else {
+                return nil
+            }
+            return nestedSchema
+        }
     }
 
     private static func arrayConstraintsApply(_ schema: [String: JSONValue], value: JSONValue, types: [String]) -> Bool {
