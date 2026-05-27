@@ -1173,6 +1173,11 @@ public enum OpenAICompatibility {
         if hasPathSignal, wantsFileMutation, hasAnyCompatibleTool(["write", "shell"], in: tools) {
             return true
         }
+        let wantsProjectScaffold = lower.range(of: #"\b(build|create|make|scaffold|generate|implement|setup|set up)\b"#, options: .regularExpression) != nil
+            && lower.range(of: #"\b(app|application|site|website|project|component|page|vite|react|next|vue|svelte|todo|dashboard|cli)\b"#, options: .regularExpression) != nil
+        if wantsProjectScaffold, hasAnyCompatibleTool(["write", "shell"], in: tools) {
+            return true
+        }
         let wantsCommand = lower.range(of: #"\b(run|execute|start|launch)\b"#, options: .regularExpression) != nil
             && (lower.contains("command") || lower.contains("shell") || lower.contains("terminal") || lower.contains("server"))
         return wantsCommand && hasCompatibleTool("shell", in: tools)
@@ -1184,7 +1189,9 @@ public enum OpenAICompatibility {
 
     private static func hasCompatibleTool(_ canonicalName: String, in tools: [OpenAIToolSpec]) -> Bool {
         let aliases = Set(toolAliases(for: canonicalName).map(normalizedName))
-        return tools.contains { aliases.contains(normalizedName($0.name)) }
+        return tools.contains { tool in
+            aliases.contains(normalizedName(tool.name)) || schemaLooksCompatible(sdkToolName: canonicalName, tool: tool)
+        }
     }
 
     private static func toolChoiceFunctionName(_ toolChoice: Any?) -> String? {
@@ -1513,11 +1520,21 @@ public enum OpenAICompatibility {
             consumed.insert(source)
         }
 
+        func copyFirst(_ sources: [String], as candidates: [String]) {
+            guard let argument = firstArgument(in: arguments, keys: sources) else { return }
+            guard let target = propertyName(matching: sources + candidates, in: properties) else {
+                consumed.insert(argument.key)
+                return
+            }
+            output[target] = argument.value
+            consumed.insert(argument.key)
+        }
+
         switch canonical {
         case "shell":
-            copy("command", as: ["cmd", "script", "input"])
-            copy("workingDirectory", as: ["cwd", "workdir", "working_directory", "directory"])
-            copy("timeout", as: ["timeoutMs", "timeout_ms", "timeoutSeconds", "timeout_seconds"])
+            copyFirst(["command", "cmd", "script", "input"], as: [])
+            copyFirst(["workingDirectory", "working_directory", "workdir", "cwd", "directory"], as: [])
+            copyFirst(["timeout", "timeoutMs", "timeout_ms", "timeoutSeconds", "timeout_seconds"], as: [])
             if let descriptionKey = propertyName(matching: ["description"], in: properties),
                output[descriptionKey] == nil {
                 let commandKey = propertyName(matching: ["command", "cmd", "script", "input"], in: properties)
@@ -2451,17 +2468,19 @@ public enum OpenAICompatibility {
     private static func canonicalToolName(_ name: String) -> String {
         let normalized = normalizedName(name)
         switch normalized {
-        case "bash", "runshellcommand", "runterminalcommand", "terminal", "execute", "executecommand", "runcommand", "run":
+        case "bash", "runshellcommand", "runterminalcommand", "runterminalcmd", "terminal", "execute", "executecommand", "runcommand", "run":
             return "shell"
-        case "writefile", "createfile", "editfile", "replacefile", "strreplaceeditor":
+        case "writefile", "createfile", "strreplaceeditor":
             return "write"
+        case "editfile", "replacefile", "searchreplace":
+            return "edit"
         case "readfile", "openfile", "viewfile":
             return "read"
         case "deletefile", "removefile":
             return "delete"
         case "search", "searchfiles", "searchfilesystem", "ripgrep", "rg":
             return "grep"
-        case "globfiles", "findfiles":
+        case "globfiles", "fileglob", "filesearch", "findfiles":
             return "glob"
         case "list", "listfiles", "listdirectory", "listdir":
             return "ls"
@@ -2481,9 +2500,11 @@ public enum OpenAICompatibility {
     private static func toolAliases(for name: String) -> [String] {
         switch canonicalToolName(name) {
         case "shell":
-            return ["shell", "bash", "run_shell_command", "run_terminal_command", "terminal", "execute", "execute_command", "run_command", "run"]
+            return ["shell", "bash", "run_shell_command", "run_terminal_command", "run_terminal_cmd", "terminal", "execute", "execute_command", "run_command", "run"]
         case "write":
-            return ["write", "write_file", "create_file", "edit_file", "replace_file", "str_replace_editor"]
+            return ["write", "write_file", "create_file", "str_replace_editor"]
+        case "edit":
+            return ["edit", "edit_file", "replace_file", "search_replace"]
         case "read":
             return ["read", "read_file", "open_file", "view_file"]
         case "delete":
@@ -2491,7 +2512,7 @@ public enum OpenAICompatibility {
         case "grep":
             return ["grep", "search", "search_files", "search_filesystem", "ripgrep", "rg"]
         case "glob":
-            return ["glob", "glob_files", "find_files"]
+            return ["glob", "glob_files", "file_glob", "file_search", "find_files"]
         case "ls":
             return ["ls", "list", "list_files", "list_directory", "list_dir"]
         case "readlints":

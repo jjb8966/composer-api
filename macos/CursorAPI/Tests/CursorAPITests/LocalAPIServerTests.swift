@@ -1413,6 +1413,82 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertTrue(prepared.prompt.contains("Use SDK shell now."))
     }
 
+    func testChatBuildAppRequestAddsRequiredLocalToolHintForSchemaCompatibleWriter() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model": "composer-2.5",
+          "messages": [
+            {"role": "user", "content": "build a todo app in vite 8 and react"}
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "project_files",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "input": {
+                      "type": "object",
+                      "properties": {
+                        "action": {"type": "string", "enum": ["read", "write", "replace", "delete"]},
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                        "old": {"type": "string"},
+                        "replacement": {"type": "string"}
+                      },
+                      "required": ["action", "path"]
+                    }
+                  },
+                  "required": ["input"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+
+        XCTAssertTrue(prepared.prompt.contains("LOCAL TOOL REQUIRED FOR THE LATEST USER REQUEST"))
+        XCTAssertTrue(prepared.prompt.contains("Emit exactly one SDK tool call next and no prose."))
+        XCTAssertTrue(prepared.prompt.contains("For creating or overwriting a file, use SDK write with path and fileText."))
+    }
+
+    func testChatFileRequestUsesSchemaCompatibleShellHint() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model": "composer-2.5",
+          "messages": [
+            {"role": "user", "content": "Create ~/Desktop/example.html with hello in it."}
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "command_runner",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "input": {
+                      "type": "object",
+                      "properties": {
+                        "command": {"type": "string"},
+                        "workdir": {"type": "string"}
+                      },
+                      "required": ["command"]
+                    }
+                  },
+                  "required": ["input"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+
+        XCTAssertTrue(prepared.prompt.contains("LOCAL TOOL REQUIRED FOR THE LATEST USER REQUEST"))
+        XCTAssertTrue(prepared.prompt.contains("Use SDK shell now."))
+    }
+
     func testResponsesFileRequestAddsRequiredLocalToolHint() throws {
         let prepared = try OpenAICompatibility.prepareResponsesRequest(Data(#"""
         {
@@ -2479,6 +2555,83 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(writeArguments["content"] as? String, "export default function App() { return null }")
         XCTAssertNil(writeArguments["path"])
         XCTAssertNil(writeArguments["fileText"])
+    }
+
+    func testChatToolCallsMapSDKAliasNamesToClientSchemas() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"run and edit files"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"bash",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "command":{"type":"string"},
+                    "description":{"type":"string"}
+                  },
+                  "required":["command","description"]
+                }
+              }
+            },
+            {
+              "type":"function",
+              "function":{
+                "name":"edit",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "filePath":{"type":"string"},
+                    "oldString":{"type":"string"},
+                    "newString":{"type":"string"}
+                  },
+                  "required":["filePath","oldString","newString"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let output = CursorSDKOutput(text: "", toolCalls: [
+            CursorToolCall(name: "run_terminal_cmd", arguments: [
+                "cmd": .string("npm test")
+            ]),
+            CursorToolCall(name: "edit_file", arguments: [
+                "target_file": .string("src/App.tsx"),
+                "old_string": .string("Hello"),
+                "new_contents": .string("Hi")
+            ])
+        ], agentID: "agent-test", runID: "run-test")
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: output
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        XCTAssertEqual(toolCalls.count, 2)
+
+        let bashFunction = try XCTUnwrap(toolCalls[0]["function"] as? [String: Any])
+        let bashArguments = try decodedArguments(bashFunction)
+        XCTAssertEqual(bashFunction["name"] as? String, "bash")
+        XCTAssertEqual(bashArguments["command"] as? String, "npm test")
+        XCTAssertEqual(bashArguments["description"] as? String, "Run npm test")
+
+        let editFunction = try XCTUnwrap(toolCalls[1]["function"] as? [String: Any])
+        let editArguments = try decodedArguments(editFunction)
+        XCTAssertEqual(editFunction["name"] as? String, "edit")
+        XCTAssertEqual(editArguments["filePath"] as? String, "src/App.tsx")
+        XCTAssertEqual(editArguments["oldString"] as? String, "Hello")
+        XCTAssertEqual(editArguments["newString"] as? String, "Hi")
+        XCTAssertNil(editArguments["target_file"])
+        XCTAssertNil(editArguments["new_contents"])
     }
 
     func testChatToolCallsExpandNestedSDKArgumentsBeforeSchemaMapping() throws {
