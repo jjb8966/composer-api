@@ -52,6 +52,14 @@ interface CursorModelPricing {
   source: string;
 }
 
+interface SdkToolCallMemory {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+const sdkToolCallMemory = new Map<string, SdkToolCallMemory>();
+const SDK_TOOL_CALL_MEMORY_LIMIT = 2048;
+
 const CURSOR_COMPOSER_2_5_PRICING_SOURCE = "https://cursor.com/changelog/composer-2-5";
 const CURSOR_MODEL_PRICING: Record<string, CursorModelPricing> = {
   default: { input: 0.5, output: 2.5, source: CURSOR_COMPOSER_2_5_PRICING_SOURCE },
@@ -656,8 +664,10 @@ export function toOpenAiToolCalls(input: {
     const name = tool?.name ?? normalizedToolCall.name;
     const sdkCanonical = canonicalToolName(normalizedToolCall.name);
     const toolArguments = normalizeToolArguments(normalizedToolCall.arguments ?? {}, tool, normalizedToolCall.name, 0, input.context);
+    const id = `call_${input.responseId.replace(/[^A-Za-z0-9]/g, "").slice(-18)}_${sdkCanonical}_${index}`;
+    rememberSdkToolCall(id, normalizedToolCall.name, normalizedToolCall.arguments ?? {});
     return [{
-      id: `call_${input.responseId.replace(/[^A-Za-z0-9]/g, "").slice(-18)}_${sdkCanonical}_${index}`,
+      id,
       type: "function",
       function: {
         name,
@@ -665,6 +675,15 @@ export function toOpenAiToolCalls(input: {
       }
     }];
   });
+}
+
+function rememberSdkToolCall(id: string, name: string, args: Record<string, unknown>) {
+  sdkToolCallMemory.set(id, { name: canonicalToolName(name), args: { ...args } });
+  if (sdkToolCallMemory.size <= SDK_TOOL_CALL_MEMORY_LIMIT) return;
+  const overflow = sdkToolCallMemory.size - SDK_TOOL_CALL_MEMORY_LIMIT;
+  for (const key of Array.from(sdkToolCallMemory.keys()).slice(0, overflow)) {
+    sdkToolCallMemory.delete(key);
+  }
 }
 
 function normalizeSdkToolCall(toolCall: CursorToolCall): CursorToolCall {
@@ -1428,17 +1447,19 @@ function sdkToolResultFeedback(
   tools: OpenAiToolSpec[] = []
 ): Record<string, unknown> {
   const original = toolCallById.get(toolCallId);
+  const sdkMemory = sdkToolCallMemory.get(toolCallId);
   const name = original?.name || fallbackToolName || "unknown";
   const args = original?.args ?? {};
   const tool = toolSpecByName(tools, name);
-  const sdkName = sdkCanonicalFromToolCallId(toolCallId) ?? sdkToolNameForOpenCodeTool(name, args, tool);
+  const sdkName = sdkMemory?.name ?? sdkCanonicalFromToolCallId(toolCallId) ?? sdkToolNameForOpenCodeTool(name, args, tool);
+  const sdkArgs = sdkMemory?.args ?? openCodeArgsToSdkArgs(name, args, tool, sdkName);
   return {
     type: "tool_call",
     call_id: toolCallId || "unknown",
     name: sdkName,
     status: "completed",
-    args: openCodeArgsToSdkArgs(name, args, tool, sdkName),
-    result: openCodeToolResultToSdkResult(name, args, resultText, sdkName)
+    args: sdkArgs,
+    result: openCodeToolResultToSdkResult(sdkMemory?.name ?? name, sdkMemory?.args ?? args, resultText, sdkName)
   };
 }
 
@@ -1455,13 +1476,18 @@ function toolSpecByName(tools: OpenAiToolSpec[], name: string): OpenAiToolSpec |
 }
 
 function sdkToolNameForOpenCodeTool(name: string, args: Record<string, unknown> = {}, tool?: OpenAiToolSpec): string {
-  const normalized = normalizeToolName(name);
   const directCanonical = canonicalToolName(name);
   if (KNOWN_SDK_CANONICAL_TOOLS.has(directCanonical)) return directCanonical;
+  if (explicitMcpTargetForClientToolName(name)) return "mcp";
   const inferred = inferSdkCanonicalFromClientTool(args, tool);
   if (inferred) return inferred;
   if (mcpTargetForClientToolName(name)) return "mcp";
   return name;
+}
+
+function explicitMcpTargetForClientToolName(name: string): { provider: string; toolName: string } | undefined {
+  const trimmed = name.trim();
+  return trimmed.startsWith("mcp__") ? mcpTargetForClientToolName(trimmed) : undefined;
 }
 
 function inferSdkCanonicalFromClientTool(args: Record<string, unknown>, tool?: OpenAiToolSpec): string | undefined {
@@ -1993,7 +2019,7 @@ function schemaCompatibilityScore(emittedName: string, tool: OpenAiToolSpec): nu
 }
 
 function canEmulateWithShell(emittedName: string): boolean {
-  return ["write", "read", "delete", "grep", "glob", "ls", "semsearch"].includes(canonicalToolName(emittedName));
+  return ["write", "read", "edit", "delete", "grep", "glob", "ls", "semsearch"].includes(canonicalToolName(emittedName));
 }
 
 function shellFallbackArguments(
@@ -2030,7 +2056,22 @@ function shellFallbackCommand(args: Record<string, unknown>, emittedName: string
     case "read": {
       const filePath = firstStringArg(args, ...pathCandidates());
       if (!filePath) return undefined;
+      const offset = firstNumberArg(args, "offset", "start", "startLine", "start_line");
+      const limit = firstNumberArg(args, "limit", "maxLines", "max_lines", "lineCount", "line_count");
+      if (offset !== undefined && limit !== undefined && limit > 0) {
+        const start = Math.max(1, Math.floor(offset));
+        const end = start + Math.floor(limit) - 1;
+        return `sed -n ${shellQuote(`${start},${end}p`)} ${shellQuote(filePath)}`;
+      }
       return `cat ${shellQuote(filePath)}`;
+    }
+    case "edit": {
+      const filePath = firstStringArg(args, ...pathCandidates());
+      const oldString = firstStringArgAllowEmpty(args, ...oldTextCandidates());
+      const newString = firstStringArgAllowEmpty(args, ...newTextCandidates());
+      if (!filePath || !oldString || newString === undefined) return undefined;
+      const replaceAll = firstBooleanArg(args, "replaceAll", "replace_all", "replaceAllOccurrences", "replace_all_occurrences") === true;
+      return `python3 - <<'PY'\nfrom pathlib import Path\npath = Path(${JSON.stringify(filePath)})\nold = ${JSON.stringify(oldString)}\nnew = ${JSON.stringify(newString)}\ntext = path.read_text()\nif old not in text:\n    raise SystemExit(f"oldString not found in {path}")\npath.write_text(text.replace(old, new, ${replaceAll ? "-1" : "1"}))\nPY`;
     }
     case "delete": {
       const filePath = firstStringArg(args, ...pathCandidates());
@@ -2528,10 +2569,10 @@ function patchStyleFileArguments(
   const patchKey = patchPropertyKey(tool, schema.properties, normalizedProperties);
   if (!patchKey) return undefined;
   const path = firstStringArg(args, ...pathCandidates(), "target_file", "targetFile");
-  if (!path) return undefined;
 
   let patch: string | undefined;
   if (emittedCanonical === "write") {
+    if (!path) return undefined;
     const content = firstStringArgAllowEmpty(args, ...fileContentCandidates());
     if (content === undefined) return undefined;
     patch = addFilePatch(path, content);
@@ -2540,19 +2581,24 @@ function patchStyleFileArguments(
     if (patchContent !== undefined) {
       patch = patchContent;
     } else {
+      if (!path) return undefined;
       const oldText = firstStringArgAllowEmpty(args, ...oldTextCandidates());
       const newText = firstStringArgAllowEmpty(args, ...newTextCandidates());
       if (oldText === undefined || newText === undefined) return undefined;
       patch = updateFilePatch(path, oldText, newText);
     }
   } else {
+    if (!path) return undefined;
     patch = deleteFilePatch(path);
   }
 
-  const normalizedPath = normalizeToolArgumentValue(path, firstMatchingProperty(pathCandidates(), schema.properties, normalizedProperties) || "path", tool, context);
   const output: Record<string, unknown> = { [patchKey]: patch };
   const pathKey = firstMatchingProperty(pathCandidates(), schema.properties, normalizedProperties);
-  if (pathKey) output[pathKey] = normalizedPath;
+  if (path && pathKey) {
+    output[pathKey] = normalizeToolArgumentValue(path, pathKey, tool, context);
+  } else if (pathKey && schema.required.includes(pathKey)) {
+    return undefined;
+  }
   return output;
 }
 

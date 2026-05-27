@@ -3299,6 +3299,61 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments["patch"] as? String, patch)
     }
 
+    func testChatToolCallsMapSDKPatchContentWithoutSeparatePathToPatchOnlyTool() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"patch app files"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"apply_patch",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "patch":{"type":"string"}
+                  },
+                  "required":["patch"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+
+        let patch = [
+            "*** Begin Patch",
+            "*** Update File: src/App.tsx",
+            "@@",
+            "-return null",
+            "+return <main />",
+            "*** End Patch"
+        ].joined(separator: "\n")
+        let output = CursorSDKOutput(text: "", toolCalls: [
+            CursorToolCall(name: "edit", arguments: [
+                "patchContent": .string(patch)
+            ])
+        ], agentID: "agent-test", runID: "run-test")
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: output
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(function["name"] as? String, "apply_patch")
+        XCTAssertNil(arguments["path"])
+        XCTAssertEqual(arguments["patch"] as? String, patch)
+    }
+
     func testChatToolCallsMapSDKFileOperationsToApplyPatchTool() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
@@ -4078,6 +4133,136 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments[3]["dir"] as? String, "src")
     }
 
+    func testChatToolResultsFeedGenericHarnessToolsBackWithSDKBuiltinNames() throws {
+        let tools: [[String: Any]] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "workspace_file",
+                    "parameters": [
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": [
+                            "action": ["type": "string", "enum": ["read", "write", "replace", "remove"]],
+                            "target": ["type": "string"],
+                            "body": ["type": "string"],
+                            "find": ["type": "string"],
+                            "replaceWith": ["type": "string"]
+                        ],
+                        "required": ["action", "target"]
+                    ]
+                ]
+            ],
+            [
+                "type": "function",
+                "function": [
+                    "name": "run_command",
+                    "parameters": [
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": [
+                            "shellCommand": ["type": "string"],
+                            "dir": ["type": "string"]
+                        ],
+                        "required": ["shellCommand"]
+                    ]
+                ]
+            ],
+            [
+                "type": "function",
+                "function": [
+                    "name": "discover_files",
+                    "parameters": [
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": [
+                            "includePattern": ["type": "string"],
+                            "dir": ["type": "string"]
+                        ],
+                        "required": ["includePattern"]
+                    ]
+                ]
+            ]
+        ]
+        let requestData = try JSONSerialization.data(withJSONObject: [
+            "model": "composer-2.5",
+            "messages": [["role": "user", "content": "build and inspect files"]],
+            "tools": tools
+        ])
+        let prepared = try OpenAICompatibility.prepareChatRequest(requestData)
+        let output = CursorSDKOutput(text: "", toolCalls: [
+            CursorToolCall(name: "write", arguments: [
+                "path": .string("src/App.tsx"),
+                "fileText": .string("export default function App() { return null }")
+            ]),
+            CursorToolCall(name: "edit", arguments: [
+                "path": .string("src/App.tsx"),
+                "oldString": .string("return null"),
+                "newString": .string("return <main />")
+            ]),
+            CursorToolCall(name: "shell", arguments: [
+                "command": .string("npm test"),
+                "workingDirectory": .string("src")
+            ]),
+            CursorToolCall(name: "glob", arguments: [
+                "globPattern": .string("**/*.tsx"),
+                "targetDirectory": .string("src")
+            ])
+        ], agentID: "agent-test", runID: "run-test")
+
+        let response = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: output
+        )
+        let choices = try XCTUnwrap(response["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+
+        XCTAssertTrue((toolCalls[0]["id"] as? String)?.contains("_write_") == true)
+        XCTAssertTrue((toolCalls[1]["id"] as? String)?.contains("_edit_") == true)
+        XCTAssertTrue((toolCalls[2]["id"] as? String)?.contains("_shell_") == true)
+        XCTAssertTrue((toolCalls[3]["id"] as? String)?.contains("_glob_") == true)
+
+        let toolResults: [[String: Any]] = toolCalls.enumerated().map { index, toolCall in
+            [
+                "role": "tool",
+                "tool_call_id": toolCall["id"] as? String ?? "",
+                "content": ["ok-write", "ok-edit", "ok-shell", "ok-glob"][index]
+            ]
+        }
+        let continueData = try JSONSerialization.data(withJSONObject: [
+            "model": "composer-2.5",
+            "messages": [
+                ["role": "user", "content": "build and inspect files"],
+                ["role": "assistant", "content": NSNull(), "tool_calls": toolCalls]
+            ] + toolResults,
+            "tools": tools
+        ])
+        let continued = try OpenAICompatibility.prepareChatRequest(continueData)
+        let prefix = "LOCAL TOOL RESULT: "
+        let feedback = try continued.prompt
+            .split(separator: "\n")
+            .filter { $0.hasPrefix(prefix) }
+            .map { line -> [String: Any] in
+                let data = Data(String(line.dropFirst(prefix.count)).utf8)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            }
+
+        XCTAssertEqual(feedback.compactMap { $0["toolName"] as? String }, ["write", "edit", "shell", "glob"])
+        let arguments = try feedback.map { try XCTUnwrap($0["arguments"] as? [String: Any]) }
+        XCTAssertEqual(arguments[0]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[0]["fileText"] as? String, "export default function App() { return null }")
+        XCTAssertEqual(arguments[1]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[1]["oldString"] as? String, "return null")
+        XCTAssertEqual(arguments[1]["newString"] as? String, "return <main />")
+        XCTAssertEqual(arguments[2]["command"] as? String, "npm test")
+        XCTAssertEqual(arguments[2]["workingDirectory"] as? String, "src")
+        XCTAssertEqual(arguments[3]["targetDirectory"] as? String, "src")
+        XCTAssertEqual(arguments[3]["globPattern"] as? String, "**/*.tsx")
+    }
+
     func testChatToolCallsDoNotMapSDKEditToSchemaMissingReplacementArguments() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
@@ -4699,6 +4884,184 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual((arguments["timeout_ms"] as? NSNumber)?.doubleValue, 120_000)
     }
 
+    func testChatToolCallsEmulateSDKPartialReadThroughShellWhenNoReadToolExists() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"read part of a file"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"bash",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "command":{"type":"string"},
+                    "description":{"type":"string"}
+                  },
+                  "required":["command","description"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "read", arguments: [
+            "path": .string("src/App.tsx"),
+            "offset": .number(5),
+            "limit": .number(10)
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(function["name"] as? String, "bash")
+        XCTAssertEqual(arguments["command"] as? String, "sed -n '5,14p' 'src/App.tsx'")
+        XCTAssertEqual(arguments["description"] as? String, "Run sed -n '5,14p' 'src/App.tsx'")
+    }
+
+    func testChatToolCallsEmulateSDKEditThroughShellWhenNoEditToolExists() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"edit a file"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"run_command",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "command":{"type":"string"},
+                    "description":{"type":"string"}
+                  },
+                  "required":["command","description"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "edit", arguments: [
+            "path": .string("src/App.tsx"),
+            "oldString": .string("return null"),
+            "newString": .string("return <main />")
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+        let command = try XCTUnwrap(arguments["command"] as? String)
+
+        XCTAssertEqual(function["name"] as? String, "run_command")
+        XCTAssertTrue(command.contains("from pathlib import Path"))
+        XCTAssertTrue(command.contains(#"path = Path("src/App.tsx")"#))
+        XCTAssertTrue(command.contains(#"old = "return null""#))
+        XCTAssertTrue(command.contains(#"new = "return <main />""#))
+        XCTAssertTrue(command.contains("text.replace(old, new, 1)"))
+        XCTAssertEqual(arguments["description"] as? String, "Run local shell command")
+    }
+
+    func testChatToolResultsFeedEmulatedShellCallsBackWithOriginalSDKArguments() throws {
+        let tools: [[String: Any]] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "bash",
+                    "parameters": [
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": [
+                            "command": ["type": "string"],
+                            "description": ["type": "string"]
+                        ],
+                        "required": ["command", "description"]
+                    ]
+                ]
+            ]
+        ]
+        let initialData = try JSONSerialization.data(withJSONObject: [
+            "model": "composer-2.5",
+            "messages": [["role": "user", "content": "build a todo app"]],
+            "tools": tools
+        ])
+        let initial = try OpenAICompatibility.prepareChatRequest(initialData)
+        let response = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_shellmemory",
+            created: 1,
+            prepared: initial,
+            output: CursorSDKOutput(text: "", toolCalls: [
+                CursorToolCall(name: "write", arguments: [
+                    "path": .string("src/App.tsx"),
+                    "fileText": .string("export default function App() { return null }")
+                ]),
+                CursorToolCall(name: "edit", arguments: [
+                    "path": .string("src/App.tsx"),
+                    "oldString": .string("return null"),
+                    "newString": .string("return <main />")
+                ])
+            ], agentID: "agent-test", runID: "run-test")
+        )
+        let choices = try XCTUnwrap(response["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let generated = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        XCTAssertEqual(generated.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }, ["bash", "bash"])
+
+        let toolResults: [[String: Any]] = generated.map {
+            [
+                "role": "tool",
+                "tool_call_id": $0["id"] as? String ?? "",
+                "content": #"{"exitCode":0,"stdout":"","stderr":""}"#
+            ]
+        }
+        let continueData = try JSONSerialization.data(withJSONObject: [
+            "model": "composer-2.5",
+            "messages": [
+                ["role": "user", "content": "build a todo app"],
+                ["role": "assistant", "content": NSNull(), "tool_calls": generated]
+            ] + toolResults,
+            "tools": tools
+        ])
+        let continued = try OpenAICompatibility.prepareChatRequest(continueData)
+        let prefix = "LOCAL TOOL RESULT: "
+        let feedback = try continued.prompt
+            .split(separator: "\n")
+            .filter { $0.hasPrefix(prefix) }
+            .map { line -> [String: Any] in
+                let data = Data(String(line.dropFirst(prefix.count)).utf8)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            }
+
+        XCTAssertEqual(feedback.compactMap { $0["toolName"] as? String }, ["write", "edit"])
+        let arguments = try feedback.map { try XCTUnwrap($0["arguments"] as? [String: Any]) }
+        XCTAssertEqual(arguments[0]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[0]["fileText"] as? String, "export default function App() { return null }")
+        XCTAssertEqual(arguments[1]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[1]["oldString"] as? String, "return null")
+        XCTAssertEqual(arguments[1]["newString"] as? String, "return <main />")
+    }
+
     func testChatToolCallsEmulateSDKGrepThroughShellWhenNoSearchToolExists() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
@@ -4788,6 +5151,250 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments["content"] as? String, "<h1>Hello</h1>")
         XCTAssertNil(arguments["path"])
         XCTAssertNil(arguments["fileText"])
+    }
+
+    func testResponsesFunctionCallsMapSDKPatchContentWithoutSeparatePathToPatchOnlyTool() throws {
+        let prepared = try OpenAICompatibility.prepareResponsesRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "input":"patch a file",
+          "tools":[
+            {
+              "type":"function",
+              "name":"apply_patch",
+              "parameters":{
+                "type":"object",
+                "properties":{
+                  "patch":{"type":"string"}
+                },
+                "required":["patch"]
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let patch = [
+            "*** Begin Patch",
+            "*** Update File: src/App.tsx",
+            "@@",
+            "-return null",
+            "+return <main />",
+            "*** End Patch"
+        ].joined(separator: "\n")
+        let toolCall = CursorToolCall(name: "edit", arguments: [
+            "patchContent": .string(patch)
+        ])
+
+        let object = OpenAICompatibility.responseObject(
+            id: "resp_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let output = try XCTUnwrap(object["output"] as? [[String: Any]])
+        let functionCall = try XCTUnwrap(output.first { ($0["type"] as? String) == "function_call" })
+        let arguments = try decodedArguments(functionCall)
+
+        XCTAssertEqual(functionCall["name"] as? String, "apply_patch")
+        XCTAssertNil(arguments["path"])
+        XCTAssertEqual(arguments["patch"] as? String, patch)
+    }
+
+    func testResponsesToolResultsFeedGenericHarnessToolsBackWithSDKBuiltinNames() throws {
+        let tools: [[String: Any]] = [
+            [
+                "type": "function",
+                "name": "workspace_file",
+                "parameters": [
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": [
+                        "action": ["type": "string", "enum": ["read", "write", "replace", "remove"]],
+                        "target": ["type": "string"],
+                        "body": ["type": "string"],
+                        "find": ["type": "string"],
+                        "replaceWith": ["type": "string"]
+                    ],
+                    "required": ["action", "target"]
+                ]
+            ],
+            [
+                "type": "function",
+                "name": "run_command",
+                "parameters": [
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": [
+                        "shellCommand": ["type": "string"],
+                        "dir": ["type": "string"]
+                    ],
+                    "required": ["shellCommand"]
+                ]
+            ],
+            [
+                "type": "function",
+                "name": "discover_files",
+                "parameters": [
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": [
+                        "includePattern": ["type": "string"],
+                        "dir": ["type": "string"]
+                    ],
+                    "required": ["includePattern"]
+                ]
+            ]
+        ]
+        let requestData = try JSONSerialization.data(withJSONObject: [
+            "model": "composer-2.5",
+            "input": "build and inspect files",
+            "tools": tools
+        ])
+        let prepared = try OpenAICompatibility.prepareResponsesRequest(requestData)
+        let response = OpenAICompatibility.responseObject(
+            id: "resp_generic",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [
+                CursorToolCall(name: "write", arguments: [
+                    "path": .string("src/App.tsx"),
+                    "fileText": .string("export default function App() { return null }")
+                ]),
+                CursorToolCall(name: "edit", arguments: [
+                    "path": .string("src/App.tsx"),
+                    "oldString": .string("return null"),
+                    "newString": .string("return <main />")
+                ]),
+                CursorToolCall(name: "shell", arguments: [
+                    "command": .string("npm test"),
+                    "workingDirectory": .string("src")
+                ]),
+                CursorToolCall(name: "glob", arguments: [
+                    "globPattern": .string("**/*.tsx"),
+                    "targetDirectory": .string("src")
+                ])
+            ], agentID: "agent-test", runID: "run-test")
+        )
+        let output = try XCTUnwrap(response["output"] as? [[String: Any]])
+        let functionCalls = output.filter { ($0["type"] as? String) == "function_call" }
+
+        XCTAssertTrue((functionCalls[0]["call_id"] as? String)?.contains("_write_") == true)
+        XCTAssertTrue((functionCalls[1]["call_id"] as? String)?.contains("_edit_") == true)
+        XCTAssertTrue((functionCalls[2]["call_id"] as? String)?.contains("_shell_") == true)
+        XCTAssertTrue((functionCalls[3]["call_id"] as? String)?.contains("_glob_") == true)
+
+        let functionOutputs: [[String: Any]] = functionCalls.enumerated().flatMap { index, functionCall in
+            [
+                functionCall,
+                [
+                    "type": "function_call_output",
+                    "call_id": functionCall["call_id"] as? String ?? "",
+                    "output": ["{\"content\":\"ok\"}", "{\"diff\":\"updated\"}", "{\"exitCode\":0,\"stdout\":\"ok\",\"stderr\":\"\"}", "{\"files\":[\"src/App.tsx\"]}"][index]
+                ]
+            ]
+        }
+        let continueData = try JSONSerialization.data(withJSONObject: [
+            "model": "composer-2.5",
+            "input": [["role": "user", "content": "build and inspect files"]] + functionOutputs,
+            "tools": tools
+        ])
+        let continued = try OpenAICompatibility.prepareResponsesRequest(continueData)
+        let prefix = "LOCAL TOOL RESULT: "
+        let feedback = try continued.prompt
+            .split(separator: "\n")
+            .filter { $0.hasPrefix(prefix) }
+            .map { line -> [String: Any] in
+                let data = Data(String(line.dropFirst(prefix.count)).utf8)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            }
+
+        XCTAssertEqual(feedback.compactMap { $0["toolName"] as? String }, ["write", "edit", "shell", "glob"])
+        let arguments = try feedback.map { try XCTUnwrap($0["arguments"] as? [String: Any]) }
+        XCTAssertEqual(arguments[0]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[0]["fileText"] as? String, "export default function App() { return null }")
+        XCTAssertEqual(arguments[1]["oldString"] as? String, "return null")
+        XCTAssertEqual(arguments[1]["newString"] as? String, "return <main />")
+        XCTAssertEqual(arguments[2]["command"] as? String, "npm test")
+        XCTAssertEqual(arguments[2]["workingDirectory"] as? String, "src")
+        XCTAssertEqual(arguments[3]["targetDirectory"] as? String, "src")
+        XCTAssertEqual(arguments[3]["globPattern"] as? String, "**/*.tsx")
+    }
+
+    func testResponsesToolResultsFeedEmulatedShellCallsBackWithOriginalSDKArguments() throws {
+        let tools: [[String: Any]] = [
+            [
+                "type": "function",
+                "name": "bash",
+                "parameters": [
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": [
+                        "command": ["type": "string"],
+                        "description": ["type": "string"]
+                    ],
+                    "required": ["command", "description"]
+                ]
+            ]
+        ]
+        let requestData = try JSONSerialization.data(withJSONObject: [
+            "model": "composer-2.5",
+            "input": "build a todo app",
+            "tools": tools
+        ])
+        let prepared = try OpenAICompatibility.prepareResponsesRequest(requestData)
+        let response = OpenAICompatibility.responseObject(
+            id: "resp_shellmemory",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [
+                CursorToolCall(name: "write", arguments: [
+                    "path": .string("src/App.tsx"),
+                    "fileText": .string("export default function App() { return null }")
+                ]),
+                CursorToolCall(name: "edit", arguments: [
+                    "path": .string("src/App.tsx"),
+                    "oldString": .string("return null"),
+                    "newString": .string("return <main />")
+                ])
+            ], agentID: "agent-test", runID: "run-test")
+        )
+        let output = try XCTUnwrap(response["output"] as? [[String: Any]])
+        let functionCalls = output.filter { ($0["type"] as? String) == "function_call" }
+        XCTAssertEqual(functionCalls.compactMap { $0["name"] as? String }, ["bash", "bash"])
+
+        let functionOutputs: [[String: Any]] = functionCalls.enumerated().flatMap { _, functionCall in
+            [
+                functionCall,
+                [
+                    "type": "function_call_output",
+                    "call_id": functionCall["call_id"] as? String ?? "",
+                    "output": #"{"exitCode":0,"stdout":"","stderr":""}"#
+                ]
+            ]
+        }
+        let continueData = try JSONSerialization.data(withJSONObject: [
+            "model": "composer-2.5",
+            "input": [["role": "user", "content": "build a todo app"]] + functionOutputs,
+            "tools": tools
+        ])
+        let continued = try OpenAICompatibility.prepareResponsesRequest(continueData)
+        let prefix = "LOCAL TOOL RESULT: "
+        let feedback = try continued.prompt
+            .split(separator: "\n")
+            .filter { $0.hasPrefix(prefix) }
+            .map { line -> [String: Any] in
+                let data = Data(String(line.dropFirst(prefix.count)).utf8)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            }
+
+        XCTAssertEqual(feedback.compactMap { $0["toolName"] as? String }, ["write", "edit"])
+        let arguments = try feedback.map { try XCTUnwrap($0["arguments"] as? [String: Any]) }
+        XCTAssertEqual(arguments[0]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[0]["fileText"] as? String, "export default function App() { return null }")
+        XCTAssertEqual(arguments[1]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[1]["oldString"] as? String, "return null")
+        XCTAssertEqual(arguments[1]["newString"] as? String, "return <main />")
     }
 
     func testResponsesFunctionCallsEmulateSDKGlobThroughShellWhenNoGlobToolExists() throws {

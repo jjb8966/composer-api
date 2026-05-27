@@ -9,10 +9,50 @@ public struct OpenAIToolSpec: Codable, Equatable, Sendable {
 public struct ResponseToolCallMemory: Equatable, Sendable {
     public var name: String
     public var arguments: [String: JSONValue]
+    public var sdkName: String?
+    public var sdkArguments: [String: JSONValue]?
 
-    public init(name: String, arguments: [String: JSONValue]) {
+    public init(name: String, arguments: [String: JSONValue], sdkName: String? = nil, sdkArguments: [String: JSONValue]? = nil) {
         self.name = name
         self.arguments = arguments
+        self.sdkName = sdkName
+        self.sdkArguments = sdkArguments
+    }
+}
+
+private struct SDKToolCallMemory: Sendable {
+    var name: String
+    var arguments: [String: JSONValue]
+}
+
+private final class SDKToolCallMemoryStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: SDKToolCallMemory] = [:]
+    private var order: [String] = []
+    private let limit = 2_048
+
+    func remember(id: String, name: String, arguments: [String: JSONValue]) {
+        lock.lock()
+        defer { lock.unlock() }
+        if values[id] == nil {
+            order.append(id)
+        }
+        values[id] = SDKToolCallMemory(name: name, arguments: arguments)
+        pruneLocked()
+    }
+
+    func memory(id: String) -> SDKToolCallMemory? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[id]
+    }
+
+    private func pruneLocked() {
+        guard order.count > limit else { return }
+        for key in order.prefix(order.count - limit) {
+            values.removeValue(forKey: key)
+        }
+        order.removeFirst(order.count - limit)
     }
 }
 
@@ -38,6 +78,7 @@ public struct PreparedChatRequest: Equatable, Sendable {
 
 public enum OpenAICompatibility {
     private static let toolResultContinuation = "The above tool calls have been executed. Continue your response based on these results."
+    private static let sdkToolCallMemory = SDKToolCallMemoryStore()
 
     public static func modelList() -> [String: Any] {
         [
@@ -332,9 +373,18 @@ public enum OpenAICompatibility {
             guard let resolved = resolveToolCall(toolCall, tools: prepared.tools, context: prepared.toolContext) else {
                 return nil
             }
+            let normalizedToolCall = normalizeSDKToolCall(toolCall)
+            let sdkCanonical = canonicalToolName(normalizedToolCall.name)
+            let callID = "call_\(suffix)_\(sdkCanonical)_\(index)"
+            sdkToolCallMemory.remember(id: callID, name: sdkCanonical, arguments: normalizedToolCall.arguments)
             return (
-                "call_\(suffix)_\(index)",
-                ResponseToolCallMemory(name: resolved.name, arguments: resolved.arguments)
+                callID,
+                ResponseToolCallMemory(
+                    name: resolved.name,
+                    arguments: resolved.arguments,
+                    sdkName: sdkCanonical,
+                    sdkArguments: normalizedToolCall.arguments
+                )
             )
         })
     }
@@ -1511,7 +1561,13 @@ public enum OpenAICompatibility {
             let argsData = Data(argsString.utf8)
             let args = ((try? JSONSerialization.jsonObject(with: argsData)) as? [String: Any] ?? [:])
                 .mapValues(JSONValue.from)
-            remembered[id] = ResponseToolCallMemory(name: name, arguments: args)
+            let sdkMemory = sdkToolCallMemory.memory(id: id)
+            remembered[id] = ResponseToolCallMemory(
+                name: name,
+                arguments: args,
+                sdkName: sdkMemory?.name,
+                sdkArguments: sdkMemory?.arguments
+            )
         }
     }
 
@@ -1541,17 +1597,35 @@ public enum OpenAICompatibility {
         tools: [OpenAIToolSpec] = []
     ) -> String {
         let rememberedCall = remembered[toolCallID]
+        let registeredSDKCall = sdkToolCallMemory.memory(id: toolCallID)
         let clientToolName = toolName.isEmpty ? rememberedCall?.name ?? "" : toolName
         let arguments = rememberedCall?.arguments ?? [:]
         let tool = toolSpec(named: clientToolName, in: tools)
+        let sdkToolName = rememberedCall?.sdkName
+            ?? registeredSDKCall?.name
+            ?? sdkCanonical(fromToolCallID: toolCallID)
+            ?? sdkFeedbackToolName(for: clientToolName, arguments: arguments, tool: tool)
+        let sdkArguments = rememberedCall?.sdkArguments
+            ?? registeredSDKCall?.arguments
+            ?? sdkFeedbackArguments(for: clientToolName, arguments: arguments, tool: tool, sdkToolName: sdkToolName)
         let record: [String: Any] = [
             "toolCallId": toolCallID,
-            "toolName": sdkFeedbackToolName(for: clientToolName),
-            "arguments": sdkFeedbackArguments(for: clientToolName, arguments: arguments, tool: tool).mapValues(\.foundationValue),
+            "toolName": sdkToolName,
+            "arguments": sdkArguments.mapValues(\.foundationValue),
             "result": text
         ]
         let data = (try? JSONSerialization.data(withJSONObject: record, options: [.withoutEscapingSlashes])) ?? Data("{}".utf8)
         return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    private static func sdkCanonical(fromToolCallID toolCallID: String) -> String? {
+        let parts = toolCallID.split(separator: "_").map(String.init)
+        guard parts.count >= 2,
+              Int(parts.last ?? "") != nil else {
+            return nil
+        }
+        let canonical = parts[parts.count - 2].lowercased()
+        return isKnownSDKCanonical(canonical) ? canonical : nil
     }
 
     private static func toolSpec(named name: String, in tools: [OpenAIToolSpec]) -> OpenAIToolSpec? {
@@ -1559,26 +1633,85 @@ public enum OpenAICompatibility {
         return tools.first { normalizedName($0.name) == normalized }
     }
 
-    private static func sdkFeedbackToolName(for clientToolName: String) -> String {
-        if mcpTarget(forClientToolName: clientToolName) != nil {
-            return "mcp"
-        }
+    private static func sdkFeedbackToolName(for clientToolName: String, arguments: [String: JSONValue] = [:], tool: OpenAIToolSpec? = nil) -> String {
         let canonical = canonicalToolName(clientToolName)
         if isKnownSDKCanonical(canonical) {
             return canonical
         }
+        if explicitMCPTarget(forClientToolName: clientToolName) != nil {
+            return "mcp"
+        }
+        if let inferred = inferSDKCanonicalFromClientTool(arguments: arguments, tool: tool) {
+            return inferred
+        }
+        if mcpTarget(forClientToolName: clientToolName) != nil {
+            return "mcp"
+        }
         return clientToolName
     }
 
-    private static func sdkFeedbackArguments(for clientToolName: String, arguments: [String: JSONValue], tool: OpenAIToolSpec? = nil) -> [String: JSONValue] {
-        if let target = mcpTarget(forClientToolName: clientToolName) {
+    private static func explicitMCPTarget(forClientToolName name: String) -> (provider: String, toolName: String)? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("mcp__") else { return nil }
+        return mcpTarget(forClientToolName: trimmed)
+    }
+
+    private static func inferSDKCanonicalFromClientTool(arguments: [String: JSONValue], tool: OpenAIToolSpec?) -> String? {
+        let operation = firstArgument(in: arguments, keys: operationPropertyAliases())?.value.stringValue
+        switch normalizedName(operation ?? "") {
+        case "write", "create", "overwrite":
+            return "write"
+        case "replace", "strreplace", "edit", "update":
+            return "edit"
+        case "read", "view", "open":
+            return "read"
+        case "delete", "remove":
+            return "delete"
+        default:
+            break
+        }
+
+        guard let tool else { return nil }
+        if schemaLooksCompatible(sdkToolName: "shell", tool: tool),
+           firstArgument(in: arguments, keys: shellCommandAliases())?.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return "shell"
+        }
+        if schemaLooksCompatible(sdkToolName: "edit", tool: tool),
+           firstArgument(in: arguments, keys: oldTextAliases()) != nil,
+           firstArgument(in: arguments, keys: newTextAliases()) != nil {
+            return "edit"
+        }
+        if schemaLooksCompatible(sdkToolName: "write", tool: tool),
+           firstArgument(in: arguments, keys: pathPropertyAliases()) != nil,
+           firstArgument(in: arguments, keys: fileContentAliases()) != nil {
+            return "write"
+        }
+        if schemaLooksCompatible(sdkToolName: "glob", tool: tool),
+           firstArgument(in: arguments, keys: globPatternAliases())?.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return "glob"
+        }
+        if schemaLooksCompatible(sdkToolName: "grep", tool: tool),
+           firstArgument(in: arguments, keys: ["pattern", "query", "search", "regex", "searchPattern", "search_pattern"])?.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return "grep"
+        }
+        if schemaLooksCompatible(sdkToolName: "ls", tool: tool),
+           firstArgument(in: arguments, keys: pathPropertyAliases() + ["directory", "dir"]) != nil {
+            return "ls"
+        }
+        return nil
+    }
+
+    private static func sdkFeedbackArguments(for clientToolName: String, arguments: [String: JSONValue], tool: OpenAIToolSpec? = nil, sdkToolName: String? = nil) -> [String: JSONValue] {
+        let canonical = sdkToolName.flatMap { isKnownSDKCanonical($0) ? $0 : nil }
+            ?? sdkFeedbackToolName(for: clientToolName, arguments: arguments, tool: tool)
+        if canonical == "mcp", let target = mcpTarget(forClientToolName: clientToolName) {
             return [
                 "providerIdentifier": .string(target.provider),
                 "toolName": .string(target.toolName),
                 "args": .object(arguments)
             ]
         }
-        switch canonicalToolName(clientToolName) {
+        switch canonical {
         case "shell":
             return compactJSON([
                 "command": firstArgument(in: arguments, keys: shellCommandAliases())?.value,
@@ -1668,8 +1801,12 @@ public enum OpenAICompatibility {
             guard let resolved = resolveToolCall(toolCall, tools: tools, context: context) else {
                 return nil
             }
+            let normalizedToolCall = normalizeSDKToolCall(toolCall)
+            let sdkCanonical = canonicalToolName(normalizedToolCall.name)
+            let id = "call_\(responseID.replacingOccurrences(of: "[^A-Za-z0-9]", with: "", options: .regularExpression).suffix(18))_\(sdkCanonical)_\(index)"
+            sdkToolCallMemory.remember(id: id, name: sdkCanonical, arguments: normalizedToolCall.arguments)
             return [
-                "id": "call_\(responseID.replacingOccurrences(of: "[^A-Za-z0-9]", with: "", options: .regularExpression).suffix(18))_\(index)",
+                "id": id,
                 "type": "function",
                 "function": [
                     "name": resolved.name,
@@ -1690,10 +1827,14 @@ public enum OpenAICompatibility {
             return nil
         }
         let suffix = responseID.replacingOccurrences(of: "[^A-Za-z0-9]", with: "", options: .regularExpression).suffix(18)
+        let normalizedToolCall = normalizeSDKToolCall(toolCall)
+        let sdkCanonical = canonicalToolName(normalizedToolCall.name)
+        let callID = "call_\(suffix)_\(sdkCanonical)_\(index)"
+        sdkToolCallMemory.remember(id: callID, name: sdkCanonical, arguments: normalizedToolCall.arguments)
         return [
             "id": "fc_\(suffix)_\(index)",
             "type": "function_call",
-            "call_id": "call_\(suffix)_\(index)",
+            "call_id": callID,
             "name": resolved.name,
             "arguments": jsonString(resolved.arguments.mapValues(\.foundationValue)),
             "status": "completed"
@@ -2123,6 +2264,31 @@ public enum OpenAICompatibility {
                 return "sed -n \(shellSingleQuoted("\(start),\(end)p")) \(quotedPath)"
             }
             return "cat \(quotedPath)"
+        case "edit":
+            guard let path = firstArgument(in: arguments, keys: pathPropertyAliases())?.value.stringValue,
+                  let oldString = firstArgument(in: arguments, keys: oldTextAliases())?.value.stringValue,
+                  !oldString.isEmpty,
+                  let newString = firstArgument(in: arguments, keys: newTextAliases())?.value.stringValue else {
+                return nil
+            }
+            let replaceAll: Bool
+            if case .bool(true) = firstArgument(in: arguments, keys: ["replaceAll", "replace_all", "replaceAllOccurrences", "replace_all_occurrences"])?.value {
+                replaceAll = true
+            } else {
+                replaceAll = false
+            }
+            return """
+            python3 - <<'PY'
+            from pathlib import Path
+            path = Path(\(pythonStringLiteral(path)))
+            old = \(pythonStringLiteral(oldString))
+            new = \(pythonStringLiteral(newString))
+            text = path.read_text()
+            if old not in text:
+                raise SystemExit(f"oldString not found in {path}")
+            path.write_text(text.replace(old, new, \(replaceAll ? "-1" : "1")))
+            PY
+            """
         case "delete":
             guard let path = firstArgument(in: arguments, keys: pathPropertyAliases())?.value.stringValue else {
                 return nil
@@ -2743,15 +2909,16 @@ public enum OpenAICompatibility {
     ) -> [String: JSONValue]? {
         let canonical = canonicalToolName(sdkToolName)
         guard ["write", "edit", "delete"].contains(canonical),
-              let patchKey = patchPropertyKey(tool: tool, properties: properties),
-              let path = firstArgument(in: arguments, keys: pathPropertyAliases() + ["target_file", "targetFile"])?.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else {
+              let patchKey = patchPropertyKey(tool: tool, properties: properties) else {
             return nil
         }
+        let path = firstArgument(in: arguments, keys: pathPropertyAliases() + ["target_file", "targetFile"])?.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
 
         let patch: String
         switch canonical {
         case "write":
-            guard let content = firstArgument(in: arguments, keys: fileContentAliases())?.value.stringValue else {
+            guard let path,
+                  let content = firstArgument(in: arguments, keys: fileContentAliases())?.value.stringValue else {
                 return nil
             }
             patch = addFilePatch(path: path, content: content)
@@ -2759,19 +2926,25 @@ public enum OpenAICompatibility {
             if let patchContent = firstArgument(in: arguments, keys: ["patchContent", "patch_content", "patch", "diff", "unifiedDiff", "unified_diff"])?.value.stringValue {
                 patch = patchContent
             } else {
-                guard let oldText = firstArgument(in: arguments, keys: oldTextAliases())?.value.stringValue,
+                guard let path,
+                      let oldText = firstArgument(in: arguments, keys: oldTextAliases())?.value.stringValue,
                       let newText = firstArgument(in: arguments, keys: newTextAliases())?.value.stringValue else {
                     return nil
                 }
                 patch = updateFilePatch(path: path, oldText: oldText, newText: newText)
             }
         default:
+            guard let path else { return nil }
             patch = deleteFilePatch(path: path)
         }
 
         var output: [String: JSONValue] = [patchKey: .string(patch)]
         if let pathKey = propertyName(matching: pathPropertyAliases(), in: properties) {
-            output[pathKey] = normalizeToolArgumentValue(.string(path), property: pathKey, tool: tool, context: context)
+            if let path {
+                output[pathKey] = normalizeToolArgumentValue(.string(path), property: pathKey, tool: tool, context: context)
+            } else if isRequired(pathKey, in: requiredParameterNames(tool)) {
+                return nil
+            }
         }
         return output
     }
@@ -2883,7 +3056,7 @@ public enum OpenAICompatibility {
 
     private static func canEmulateWithShell(sdkToolName: String) -> Bool {
         switch canonicalToolName(sdkToolName) {
-        case "write", "read", "delete", "grep", "glob", "ls", "semsearch":
+        case "write", "read", "edit", "delete", "grep", "glob", "ls", "semsearch":
             return true
         default:
             return false

@@ -1191,6 +1191,157 @@ describe("OpenAI compatibility adapter", () => {
     expect(feedback.result.value).toMatchObject({ exitCode: 0, stdout: "ok", stderr: "" });
   });
 
+  it("feeds Responses generic harness outputs back with SDK builtin names from generated call ids", () => {
+    const fileText = "export default function App() { return null }";
+    const tools = [
+      {
+        type: "function",
+        name: "workspace_file",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            action: { type: "string", enum: ["read", "write", "replace", "remove"] },
+            target: { type: "string" },
+            body: { type: "string" },
+            find: { type: "string" },
+            replaceWith: { type: "string" }
+          },
+          required: ["action", "target"]
+        }
+      },
+      {
+        type: "function",
+        name: "run_command",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            shellCommand: { type: "string" },
+            dir: { type: "string" }
+          },
+          required: ["shellCommand"]
+        }
+      },
+      {
+        type: "function",
+        name: "discover_files",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            includePattern: { type: "string" },
+            dir: { type: "string" }
+          },
+          required: ["includePattern"]
+        }
+      }
+    ];
+    const generated = toOpenAiToolCalls({
+      responseId: "resp_generic",
+      tools,
+      toolCalls: [
+        { name: "write", arguments: { path: "src/App.tsx", fileText } },
+        { name: "edit", arguments: { path: "src/App.tsx", oldString: "return null", newString: "return <main />" } },
+        { name: "shell", arguments: { command: "npm test", workingDirectory: "src" } },
+        { name: "glob", arguments: { globPattern: "**/*.tsx", targetDirectory: "src" } }
+      ]
+    });
+    const prepared = prepareResponsesRequest(
+      {
+        model: "composer-2.5",
+        input: [
+          { role: "user", content: "build and inspect files" },
+          ...generated.flatMap((toolCall, index) => [
+            {
+              type: "function_call",
+              call_id: toolCall.id,
+              name: toolCall.function.name,
+              arguments: toolCall.function.arguments
+            },
+            {
+              type: "function_call_output",
+              call_id: toolCall.id,
+              output: ["{\"content\":\"ok\"}", "{\"diff\":\"updated\"}", "{\"exitCode\":0,\"stdout\":\"ok\",\"stderr\":\"\"}", "{\"files\":[\"src/App.tsx\"]}"][index]
+            }
+          ])
+        ],
+        tools
+      },
+      { id: "composer-2.5" }
+    );
+
+    const feedback = prepared.prompt.text
+      .split("\n")
+      .filter((item) => item.startsWith("LOCAL TOOL RESULT: "))
+      .map((line) => JSON.parse(line.slice("LOCAL TOOL RESULT: ".length)));
+
+    expect(feedback.map((item) => item.name)).toEqual(["write", "edit", "shell", "glob"]);
+    expect(feedback.map((item) => item.args)).toEqual([
+      { path: "src/App.tsx", fileText },
+      { path: "src/App.tsx", oldString: "return null", newString: "return <main />" },
+      { command: "npm test", workingDirectory: "src" },
+      { targetDirectory: "src", globPattern: "**/*.tsx" }
+    ]);
+  });
+
+  it("feeds Responses emulated shell outputs back with original SDK arguments", () => {
+    const tools = [
+      {
+        type: "function",
+        name: "bash",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            command: { type: "string" },
+            description: { type: "string" }
+          },
+          required: ["command", "description"]
+        }
+      }
+    ];
+    const generated = toOpenAiToolCalls({
+      responseId: "resp_shell_memory",
+      tools,
+      toolCalls: [
+        { name: "write", arguments: { path: "src/App.tsx", fileText: "export default function App() { return null }" } },
+        { name: "edit", arguments: { path: "src/App.tsx", oldString: "return null", newString: "return <main />" } }
+      ]
+    });
+    const prepared = prepareResponsesRequest(
+      {
+        model: "composer-2.5",
+        input: [
+          { role: "user", content: "build a todo app" },
+          ...generated.flatMap((toolCall) => [
+            {
+              type: "function_call",
+              call_id: toolCall.id,
+              name: toolCall.function.name,
+              arguments: toolCall.function.arguments
+            },
+            { type: "function_call_output", call_id: toolCall.id, output: "{\"exitCode\":0,\"stdout\":\"\",\"stderr\":\"\"}" }
+          ])
+        ],
+        tools
+      },
+      { id: "composer-2.5" }
+    );
+
+    const feedback = prepared.prompt.text
+      .split("\n")
+      .filter((item) => item.startsWith("LOCAL TOOL RESULT: "))
+      .map((line) => JSON.parse(line.slice("LOCAL TOOL RESULT: ".length)));
+
+    expect(generated.map((call) => call.function.name)).toEqual(["bash", "bash"]);
+    expect(feedback.map((item) => item.name)).toEqual(["write", "edit"]);
+    expect(feedback.map((item) => item.args)).toEqual([
+      { path: "src/App.tsx", fileText: "export default function App() { return null }" },
+      { path: "src/App.tsx", oldString: "return null", newString: "return <main />" }
+    ]);
+  });
+
   it("returns OpenAI-shaped response objects", () => {
     const chat = chatCompletionResponse({
       id: "chatcmpl_test",
@@ -2222,6 +2373,115 @@ describe("OpenAI compatibility adapter", () => {
     expect(args.description).toContain("mkdir -p");
   });
 
+  it("emulates SDK partial reads through shell without reading the whole file", () => {
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "bash",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              command: { type: "string" },
+              description: { type: "string" }
+            },
+            required: ["command", "description"]
+          }
+        }
+      ],
+      toolCalls: [{ name: "read", arguments: { path: "src/App.tsx", offset: 5, limit: 10 } }]
+    });
+
+    expect(toolCalls[0].function.name).toBe("bash");
+    const args = JSON.parse(toolCalls[0].function.arguments);
+    expect(args.command).toBe("sed -n '5,14p' 'src/App.tsx'");
+    expect(args.description).toBe("Runs sed -n '5,14p' 'src/App.tsx'");
+  });
+
+  it("emulates SDK edits through shell when shell is the only compatible client tool", () => {
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "run_command",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              command: { type: "string" },
+              description: { type: "string" }
+            },
+            required: ["command", "description"]
+          }
+        }
+      ],
+      toolCalls: [{ name: "edit", arguments: { path: "src/App.tsx", oldString: "return null", newString: "return <main />" } }]
+    });
+
+    expect(toolCalls[0].function.name).toBe("run_command");
+    const args = JSON.parse(toolCalls[0].function.arguments);
+    expect(args.command).toContain("from pathlib import Path");
+    expect(args.command).toContain('path = Path("src/App.tsx")');
+    expect(args.command).toContain('old = "return null"');
+    expect(args.command).toContain('new = "return <main />"');
+    expect(args.command).toContain("text.replace(old, new, 1)");
+    expect(args.description).toContain("python3");
+  });
+
+  it("feeds emulated shell tool results back with the original SDK arguments", () => {
+    const tools = [
+      {
+        name: "bash",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            command: { type: "string" },
+            description: { type: "string" }
+          },
+          required: ["command", "description"]
+        }
+      }
+    ];
+    const generated = toOpenAiToolCalls({
+      responseId: "chatcmpl_shell_memory",
+      tools,
+      toolCalls: [
+        { name: "write", arguments: { path: "src/App.tsx", fileText: "export default function App() { return null }" } },
+        { name: "edit", arguments: { path: "src/App.tsx", oldString: "return null", newString: "return <main />" } },
+        { name: "read", arguments: { path: "src/App.tsx", offset: 5, limit: 10 } }
+      ]
+    });
+    const prepared = prepareOpencodeSdkChatRequest(
+      {
+        model: "composer-2.5-sdk",
+        messages: [
+          { role: "user", content: "build a todo app" },
+          { role: "assistant", content: null, tool_calls: generated },
+          { role: "tool", tool_call_id: generated[0].id, content: "{\"exitCode\":0,\"stdout\":\"\",\"stderr\":\"\"}" },
+          { role: "tool", tool_call_id: generated[1].id, content: "{\"exitCode\":0,\"stdout\":\"\",\"stderr\":\"\"}" },
+          { role: "tool", tool_call_id: generated[2].id, content: "line 5" }
+        ],
+        tools
+      },
+      { id: "composer-2.5-sdk" }
+    );
+
+    const feedback = prepared.prompt.text
+      .split("\n")
+      .filter((item) => item.startsWith("LOCAL OPENCODE TOOL RESULT: "))
+      .map((line) => JSON.parse(line.slice("LOCAL OPENCODE TOOL RESULT: ".length)));
+
+    expect(generated.map((call) => call.function.name)).toEqual(["bash", "bash", "bash"]);
+    expect(feedback.map((item) => item.name)).toEqual(["write", "edit", "read"]);
+    expect(feedback.map((item) => item.args)).toEqual([
+      { path: "src/App.tsx", fileText: "export default function App() { return null }" },
+      { path: "src/App.tsx", oldString: "return null", newString: "return <main />" },
+      { path: "src/App.tsx", offset: 5, limit: 10 }
+    ]);
+  });
+
   it("maps Cursor SDK MCP calls to generic wrapper functions", () => {
     const toolCalls = toOpenAiToolCalls({
       responseId: "chatcmpl_test",
@@ -2658,6 +2918,54 @@ describe("OpenAI compatibility adapter", () => {
       path: "src/App.tsx",
       patch
     });
+  });
+
+  it("maps SDK patchContent edits without a separate path to patch-only tools", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: src/App.tsx",
+      "@@",
+      "-return null",
+      "+return <main />",
+      "*** End Patch"
+    ].join("\n");
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "apply_patch",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              patch: { type: "string" }
+            },
+            required: ["patch"]
+          }
+        }
+      ],
+      toolCalls: [{ name: "edit", arguments: { patchContent: patch } }]
+    });
+
+    expect(toolCalls[0].function.name).toBe("apply_patch");
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ patch });
+    expect(
+      responseObject({
+        id: "resp_patch",
+        created: 1,
+        model: "composer-2.5",
+        text: "",
+        toolCalls,
+        promptChars: 20
+      }).output
+    ).toEqual([
+      expect.objectContaining({
+        type: "function_call",
+        call_id: toolCalls[0].id,
+        name: "apply_patch",
+        arguments: JSON.stringify({ patch })
+      })
+    ]);
   });
 
   it("maps SDK file operations to apply-patch style tools", () => {
