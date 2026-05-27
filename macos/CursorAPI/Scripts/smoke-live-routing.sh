@@ -361,6 +361,47 @@ JSON
   printf '%s\n' "$models_output"
   grep -F "cursorapi/composer-2.5-fast" <<<"$models_output" >/dev/null || fail "OpenCode did not list composer-2.5-fast"
 
+  glob_project="$(mktemp -d "${TMPDIR:-/tmp}/api-for-cursor-live-opencode-glob-project.XXXXXX")"
+  glob_output="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-live-opencode-glob-run.XXXXXX")"
+  TEMP_DIRS+=("$glob_project")
+  TEMP_FILES+=("$glob_output")
+  mkdir -p "$glob_project/src"
+  printf 'export const smoke = true\n' > "$glob_project/src/App.tsx"
+  printf '{"name":"api-for-cursor-glob-smoke"}\n' > "$glob_project/package.json"
+  (
+    cd "$glob_project"
+    HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" \
+      opencode --pure run --agent build --model cursorapi/composer-2.5-fast --format json --dangerously-skip-permissions \
+        "Use the glob tool, not bash, to find files matching **/*.tsx in the current project."
+  ) >"$glob_output" 2>&1 &
+  glob_pid=$!
+  deadline=$((SECONDS + TIMEOUT_SECONDS))
+  glob_verified=0
+  while kill -0 "$glob_pid" >/dev/null 2>&1; do
+    if grep -F '"tool":"glob"' "$glob_output" >/dev/null \
+      && grep -F '"pattern":"**/*"' "$glob_output" >/dev/null \
+      && grep -F 'src/App.tsx' "$glob_output" >/dev/null \
+      && ! grep -F "SchemaError" "$glob_output" >/dev/null; then
+      glob_verified=1
+      kill "$glob_pid" >/dev/null 2>&1 || true
+      wait "$glob_pid" >/dev/null 2>&1 || true
+      break
+    fi
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      kill "$glob_pid" >/dev/null 2>&1 || true
+      wait "$glob_pid" >/dev/null 2>&1 || true
+      tail -80 "$glob_output"
+      fail "OpenCode live glob run did not finish before timeout"
+    fi
+    sleep 0.5
+  done
+  wait "$glob_pid" >/dev/null 2>&1 || true
+  if [ "$glob_verified" -ne 1 ]; then
+    tail -80 "$glob_output"
+    fail "OpenCode did not execute a valid live glob tool round trip"
+  fi
+  echo "Verified live OpenCode glob tool schema through API for Cursor."
+
   session="api-for-cursor-live-opencode-$$"
   marker="AFC_TOOL_DONE_$$"
   tool_file="opencode_live_tool_smoke.txt"

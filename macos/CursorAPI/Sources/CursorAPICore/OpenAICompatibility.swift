@@ -1341,11 +1341,24 @@ public enum OpenAICompatibility {
             copy("sortAscending", as: ["sort_ascending", "ascending"])
             copy("offset", as: ["start", "startLine", "start_line"])
         case "glob":
-            copy("targetDirectory", as: ["target_directory", "directory", "cwd", "path"])
-            copy("globPattern", as: ["glob_pattern", "pattern", "glob"])
+            let glob = normalizedGlobArguments(arguments)
+            if let patternKey = propertyName(matching: ["pattern", "globPattern", "glob_pattern", "glob"], in: properties) {
+                let pattern = glob.pattern ?? .string("**/*")
+                output[patternKey] = pattern
+            }
+            if let searchPath = glob.searchPath,
+               shouldIncludeOptionalPath(searchPath),
+               let pathKey = propertyName(matching: ["path", "targetDirectory", "target_directory", "directory", "cwd"], in: properties) {
+                output[pathKey] = searchPath
+            }
+            consumed.formUnion(glob.consumed)
         case "ls":
             copy("path", as: pathPropertyAliases() + ["directory", "dir"])
             copy("ignore", as: ["ignorePatterns", "ignore_patterns", "exclude"])
+            if output.isEmpty,
+               let pathKey = propertyName(matching: pathPropertyAliases() + ["directory", "dir"], in: properties) {
+                output[pathKey] = .string(".")
+            }
         case "readlints":
             copy("paths", as: ["files", "filePaths", "file_paths"])
         case "mcp":
@@ -1379,6 +1392,75 @@ public enum OpenAICompatibility {
         }
 
         return output.isEmpty ? arguments : output
+    }
+
+    private struct NamedArgument {
+        var key: String
+        var value: JSONValue
+    }
+
+    private struct GlobArguments {
+        var pattern: JSONValue?
+        var searchPath: JSONValue?
+        var consumed: Set<String>
+    }
+
+    private static func normalizedGlobArguments(_ arguments: [String: JSONValue]) -> GlobArguments {
+        let patternKeys = ["globPattern", "glob_pattern", "pattern", "glob"]
+        let pathKeys = ["targetDirectory", "target_directory", "directory", "cwd", "path"]
+        var pattern = firstArgument(in: arguments, keys: patternKeys)
+        var searchPath = firstArgument(in: arguments, keys: pathKeys)
+        var consumed = Set<String>()
+
+        if let key = pattern?.key { consumed.insert(key) }
+        if let key = searchPath?.key { consumed.insert(key) }
+
+        let patternLooksGlob = pattern?.value.stringValue.map(looksLikeGlobPattern) ?? false
+        let pathLooksGlob = searchPath?.value.stringValue.map(looksLikeGlobPattern) ?? false
+
+        if pathLooksGlob && !patternLooksGlob {
+            swap(&pattern, &searchPath)
+        } else if pattern == nil, pathLooksGlob {
+            pattern = searchPath
+            searchPath = nil
+        }
+
+        if let key = pattern?.key { consumed.insert(key) }
+        if let key = searchPath?.key { consumed.insert(key) }
+
+        return GlobArguments(pattern: pattern?.value, searchPath: searchPath?.value, consumed: consumed)
+    }
+
+    private static func firstArgument(in arguments: [String: JSONValue], keys: [String]) -> NamedArgument? {
+        for key in keys {
+            if let value = arguments[key] {
+                return NamedArgument(key: key, value: value)
+            }
+        }
+        let normalizedKeys = Set(keys.map(normalizedName))
+        for (key, value) in arguments where normalizedKeys.contains(normalizedName(key)) {
+            return NamedArgument(key: key, value: value)
+        }
+        return nil
+    }
+
+    private static func looksLikeGlobPattern(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.contains("*")
+            || trimmed.contains("?")
+            || trimmed.contains("[")
+            || trimmed.contains("]")
+            || trimmed.contains("{")
+            || trimmed.contains("}")
+    }
+
+    private static func shouldIncludeOptionalPath(_ value: JSONValue) -> Bool {
+        guard let string = value.stringValue else { return true }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let lower = trimmed.lowercased()
+        return lower != "undefined" && lower != "null"
     }
 
     private static func normalizeTodoWriteArguments(_ arguments: [String: JSONValue]) -> [String: JSONValue] {
