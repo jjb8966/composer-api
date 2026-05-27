@@ -149,7 +149,7 @@ describe("OpenAI compatibility adapter", () => {
     expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: "**/*.tsx", path: "src" });
   });
 
-  it("treats pi find as a glob-compatible built-in instead of synthetic MCP", () => {
+  it("advertises pi find as exact SDK MCP while retaining glob fallback mapping", () => {
     const prepared = prepareOpencodeSdkChatRequest(
       {
         model: "composer-2.5-sdk",
@@ -176,8 +176,9 @@ describe("OpenAI compatibility adapter", () => {
     );
 
     expect(prepared.prompt.text).toContain('"name":"find"');
-    expect(prepared.prompt.text).not.toContain('"sdk_mcp":{"providerIdentifier":"client","toolName":"find"');
-    expect(prepared.prompt.text).toContain("Use SDK glob now; it will be forwarded to client tool find");
+    expect(prepared.prompt.text).toContain('"sdk_mcp":{"providerIdentifier":"client","toolName":"find","args":"match this tool schema"}');
+    expect(prepared.prompt.text).toContain('"sdk":"mcp","client":"find","sdkArgs":{"providerIdentifier":"client","toolName":"find","args":"match client schema"}');
+    expect(prepared.prompt.text).toContain('Use SDK mcp now with providerIdentifier "client", toolName "find"');
 
     const toolCalls = toOpenAiToolCalls({
       responseId: "chatcmpl_test",
@@ -186,6 +187,30 @@ describe("OpenAI compatibility adapter", () => {
     });
 
     expect(toolCalls[0].function.name).toBe("find");
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: "**/*.tsx", path: "src" });
+  });
+
+  it("maps exact SDK MCP calls to built-in client tool schemas", () => {
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "glob",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              pattern: { type: "string" },
+              path: { type: "string" }
+            },
+            required: ["pattern"]
+          }
+        }
+      ],
+      toolCalls: [{ name: "mcp", arguments: { providerIdentifier: "client", toolName: "glob", args: { pattern: "**/*.tsx", path: "src" } } }]
+    });
+
+    expect(toolCalls[0].function.name).toBe("glob");
     expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: "**/*.tsx", path: "src" });
   });
 
@@ -1140,7 +1165,8 @@ describe("OpenAI compatibility adapter", () => {
 
     expect(prepared.prompt.text).toContain('Use SDK mcp now with providerIdentifier "probe", toolName "write_file"');
     expect(prepared.prompt.text).toContain("Do not use SDK shell/write as a substitute");
-    expect(prepared.prompt.text).toContain("Non-builtin client tools, including OpenCode MCP/server tools, should be requested with SDK mcp");
+    expect(prepared.prompt.text).toContain("When the user names a specific allowed client tool, use its SDK mcp route");
+    expect(prepared.prompt.text).not.toContain('"sdk":"read","client":"probe_write_file"');
     expect(prepared.prompt.text).not.toContain("Your next tool call must be write or shell");
     expect(prepared.requiresLocalTool).toBe(true);
   });
@@ -3003,6 +3029,29 @@ describe("OpenAI compatibility adapter", () => {
     });
 
     expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: "**/*.tsx", path: "/tmp/project" });
+  });
+
+  it("repairs swapped SDK glob values when the search root is current directory", () => {
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "glob",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              pattern: { type: "string" },
+              path: { type: "string" }
+            },
+            required: ["pattern"]
+          }
+        }
+      ],
+      toolCalls: [{ name: "glob", arguments: { targetDirectory: "**/*", globPattern: "." } }]
+    });
+
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: "**/*", path: "." });
   });
 
   it("defaults empty SDK glob calls to a valid OpenCode workspace glob", () => {

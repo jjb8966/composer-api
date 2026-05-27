@@ -1457,7 +1457,7 @@ final class LocalAPIServerTests: XCTestCase {
 
         XCTAssertTrue(prepared.prompt.contains("LOCAL TOOL REQUIRED FOR THE LATEST USER REQUEST"))
         XCTAssertTrue(prepared.prompt.contains("Emit exactly one SDK tool call next and no prose."))
-        XCTAssertTrue(prepared.prompt.contains("Use SDK shell now."))
+        XCTAssertTrue(prepared.prompt.contains("Use the SDK mcp route for the client shell/bash tool"))
     }
 
     func testChatBuildAppRequestAddsRequiredLocalToolHintForSchemaCompatibleWriter() throws {
@@ -1497,7 +1497,7 @@ final class LocalAPIServerTests: XCTestCase {
 
         XCTAssertTrue(prepared.prompt.contains("LOCAL TOOL REQUIRED FOR THE LATEST USER REQUEST"))
         XCTAssertTrue(prepared.prompt.contains("Emit exactly one SDK tool call next and no prose."))
-        XCTAssertTrue(prepared.prompt.contains("For creating or overwriting a file, use SDK write with path and fileText."))
+        XCTAssertTrue(prepared.prompt.contains("use the SDK mcp route for the client write tool"))
     }
 
     func testChatBuildAppRequestDoesNotRepeatRequiredHintAfterCustomWriterCall() throws {
@@ -1587,7 +1587,7 @@ final class LocalAPIServerTests: XCTestCase {
         """#.utf8))
 
         XCTAssertTrue(prepared.prompt.contains("LOCAL TOOL REQUIRED FOR THE LATEST USER REQUEST"))
-        XCTAssertTrue(prepared.prompt.contains("Use SDK shell now."))
+        XCTAssertTrue(prepared.prompt.contains("Use the SDK mcp route for the client shell/bash tool"))
     }
 
     func testResponsesFileRequestAddsRequiredLocalToolHint() throws {
@@ -1626,7 +1626,7 @@ final class LocalAPIServerTests: XCTestCase {
 
         XCTAssertTrue(prepared.prompt.contains("LOCAL TOOL REQUIRED FOR THE LATEST USER REQUEST"))
         XCTAssertTrue(prepared.prompt.contains("Emit exactly one SDK tool call next and no prose."))
-        XCTAssertTrue(prepared.prompt.contains("Use SDK shell now."))
+        XCTAssertTrue(prepared.prompt.contains("Use the SDK mcp route for the client shell/bash tool"))
     }
 
     func testResponsesFileRequestDoesNotRepeatRequiredHintAfterApplyPatchCall() throws {
@@ -2289,7 +2289,7 @@ final class LocalAPIServerTests: XCTestCase {
 
         XCTAssertTrue(prepared.prompt.contains("The above tool calls have been executed. Continue your response based on these results."))
         XCTAssertTrue(prepared.prompt.contains("LOCAL TOOL REQUIRED FOR THE LATEST USER REQUEST"))
-        XCTAssertTrue(prepared.prompt.contains("Use SDK shell now."))
+        XCTAssertTrue(prepared.prompt.contains("Use the SDK mcp route for the client shell/bash tool"))
     }
 
     func testResponsesToolChoiceDirectFunctionShapeAddsPromptHint() throws {
@@ -2315,7 +2315,7 @@ final class LocalAPIServerTests: XCTestCase {
         """#.utf8))
 
         XCTAssertEqual(prepared.tools.map(\.name), ["shell"])
-        XCTAssertTrue(prepared.prompt.contains("Use SDK shell now; it will be forwarded to client tool shell"))
+        XCTAssertTrue(prepared.prompt.contains(#"Use SDK mcp now with providerIdentifier "client", toolName "shell""#))
     }
 
     func testResponsesToolChoiceNestedFunctionShapeAddsPromptHint() throws {
@@ -2343,7 +2343,7 @@ final class LocalAPIServerTests: XCTestCase {
         """#.utf8))
 
         XCTAssertEqual(prepared.tools.map(\.name), ["shell"])
-        XCTAssertTrue(prepared.prompt.contains("Use SDK shell now; it will be forwarded to client tool shell"))
+        XCTAssertTrue(prepared.prompt.contains(#"Use SDK mcp now with providerIdentifier "client", toolName "shell""#))
     }
 
     func testResponsesEndpointReturnsFunctionCallOutputItems() async throws {
@@ -2779,6 +2779,54 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(function["name"] as? String, "glob")
         XCTAssertEqual(arguments["pattern"] as? String, "**/*.tsx")
         XCTAssertEqual(arguments["path"] as? String, "/tmp/project")
+        XCTAssertNil(arguments["targetDirectory"])
+        XCTAssertNil(arguments["globPattern"])
+    }
+
+    func testChatToolCallsRepairSwappedSDKGlobArgumentsWithCurrentDirectoryRoot() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"find source files"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"glob",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "pattern":{"type":"string"},
+                    "path":{"type":"string"}
+                  },
+                  "required":["pattern"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "glob", arguments: [
+            "targetDirectory": .string("**/*"),
+            "globPattern": .string(".")
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(function["name"] as? String, "glob")
+        XCTAssertEqual(arguments["pattern"] as? String, "**/*")
+        XCTAssertEqual(arguments["path"] as? String, ".")
         XCTAssertNil(arguments["targetDirectory"])
         XCTAssertNil(arguments["globPattern"])
     }
@@ -3898,7 +3946,7 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments["text"] as? String, "export default function App() { return <main>Ref</main> }")
     }
 
-    func testChatToolCallsMapSDKGlobToPiFindSchema() throws {
+    func testChatToolInventoryAdvertisesPiFindAsExactSDKMCPWithGlobFallback() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
           "model":"composer-2.5",
@@ -3927,8 +3975,13 @@ final class LocalAPIServerTests: XCTestCase {
         """#.utf8))
 
         XCTAssertTrue(prepared.prompt.contains(#""name":"find""#))
-        XCTAssertFalse(prepared.prompt.contains(#""sdk_mcp":{"providerIdentifier":"client","toolName":"find""#))
-        XCTAssertTrue(prepared.prompt.contains("Use SDK glob now; it will be forwarded to client tool find"))
+        XCTAssertTrue(prepared.prompt.contains(#""sdk_mcp""#))
+        XCTAssertTrue(prepared.prompt.contains(#""sdk":"mcp""#))
+        XCTAssertTrue(prepared.prompt.contains(#""client":"find""#))
+        XCTAssertTrue(prepared.prompt.contains(#""providerIdentifier":"client""#))
+        XCTAssertTrue(prepared.prompt.contains(#""toolName":"find""#))
+        XCTAssertTrue(prepared.prompt.contains(#""args":"match client schema""#))
+        XCTAssertTrue(prepared.prompt.contains(#"Use SDK mcp now with providerIdentifier "client", toolName "find""#))
 
         let object = OpenAICompatibility.chatCompletionResponse(
             id: "chatcmpl_test",
@@ -3953,6 +4006,58 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments["path"] as? String, "src")
         XCTAssertNil(arguments["globPattern"])
         XCTAssertNil(arguments["targetDirectory"])
+    }
+
+    func testChatToolCallsMapExactSDKMCPToBuiltInClientToolSchema() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"find source files"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"glob",
+                "parameters":{
+                  "type":"object",
+                  "additionalProperties":false,
+                  "properties":{
+                    "pattern":{"type":"string"},
+                    "path":{"type":"string"}
+                  },
+                  "required":["pattern"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [
+                CursorToolCall(name: "mcp", arguments: [
+                    "providerIdentifier": .string("client"),
+                    "toolName": .string("glob"),
+                    "args": .object([
+                        "pattern": .string("**/*.tsx"),
+                        "path": .string("src")
+                    ])
+                ])
+            ], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(function["name"] as? String, "glob")
+        XCTAssertEqual(arguments["pattern"] as? String, "**/*.tsx")
+        XCTAssertEqual(arguments["path"] as? String, "src")
     }
 
     func testChatToolCallsMapSDKGrepToPiGrepSchema() throws {

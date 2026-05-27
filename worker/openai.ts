@@ -816,7 +816,8 @@ function appendResponsesToolInventory(transcript: string[], tools: OpenAiToolSpe
     `Client tool targets: ${tools.map((tool) => tool.name).join(", ")}`,
     "These are client execution targets, not the names you should emit.",
     "For local work, emit only SDK tool names from the SDK TOOL ROUTING MAP. The adapter forwards those SDK calls to the matching client tool names and schemas.",
-    "When the user names a specific allowed client tool, do not substitute a different tool. Non-builtin client tools and MCP/server tools should be requested with SDK mcp.",
+    "Prefer each tool's SDK mcp route when you need exact client schema arguments. Built-in SDK routes are fallback compatibility routes.",
+    "When the user names a specific allowed client tool, use its SDK mcp route and do not substitute a different tool.",
     "If you need a local tool, emit the tool call before prose. Do not write progress text such as \"creating the file\" instead of calling a tool."
   );
   if (hasCompatibleTool("shell", tools)) {
@@ -842,7 +843,8 @@ function appendSdkToolInventory(transcript: string[], tools: OpenAiToolSpec[], t
     `Client tool targets: ${tools.map((tool) => tool.name).join(", ")}`,
     "These are OpenCode execution targets, not the names you should emit.",
     "For local work, emit only SDK tool names from the SDK TOOL ROUTING MAP. The adapter forwards those SDK calls to the matching OpenCode tool names and schemas.",
-    "When the user names a specific allowed client tool, do not substitute a different tool. Non-builtin client tools, including OpenCode MCP/server tools, should be requested with SDK mcp using providerIdentifier, toolName, and args.",
+    "Prefer each tool's SDK mcp route when you need exact OpenCode schema arguments. Built-in SDK routes are fallback compatibility routes.",
+    "When the user names a specific allowed client tool, use its SDK mcp route and do not substitute a different tool.",
     "For general local work, prefer shell/read/write/edit/glob/grep/ls style tool requests when those capabilities are present."
   );
   for (const tool of tools) {
@@ -870,18 +872,8 @@ function appendSdkRoutingMap(transcript: string[], tools: OpenAiToolSpec[], cont
 
 function sdkRoutingRecords(tools: OpenAiToolSpec[], context?: ToolCallContext): Record<string, unknown>[] {
   const routes: Record<string, unknown>[] = [];
-  for (const sample of sdkRoutingSamples()) {
-    const tool = resolveToolSpec(sample.name, sample.arguments, tools);
-    if (!tool) continue;
-    const clientArgs = normalizeToolArguments(sample.arguments, tool, sample.name, 0, context);
-    routes.push({
-      sdk: sample.name,
-      client: tool.name,
-      clientArgs
-    });
-  }
   for (const tool of tools) {
-    const target = mcpTargetForClientToolName(tool.name);
+    const target = mcpTargetForClientToolName(tool.name, { includeMapped: true });
     if (!target) continue;
     routes.push({
       sdk: "mcp",
@@ -891,6 +883,17 @@ function sdkRoutingRecords(tools: OpenAiToolSpec[], context?: ToolCallContext): 
         toolName: target.toolName,
         args: "match client schema"
       }
+    });
+  }
+  for (const sample of sdkRoutingSamples()) {
+    const tool = resolveToolSpec(sample.name, sample.arguments, tools);
+    if (!tool) continue;
+    const clientArgs = normalizeToolArguments(sample.arguments, tool, sample.name, 0, context);
+    if (!toolArgumentsSatisfySchema(clientArgs, tool)) continue;
+    routes.push({
+      sdk: sample.name,
+      client: tool.name,
+      clientArgs
     });
   }
   return routes.slice(0, 24);
@@ -913,7 +916,7 @@ function sdkRoutingSamples(): CursorToolCall[] {
 }
 
 function toolInventoryRecord(tool: OpenAiToolSpec, options: { includeSdkMcp: boolean }): Record<string, unknown> {
-  const target = options.includeSdkMcp ? mcpTargetForClientToolName(tool.name) : undefined;
+  const target = options.includeSdkMcp ? mcpTargetForClientToolName(tool.name, { includeMapped: true }) : undefined;
   return {
     name: tool.name,
     ...(tool.description ? { description: tool.description } : {}),
@@ -952,8 +955,8 @@ function appendResponsesWorkspaceMutationRequirement(
       : requestedTool
         ? requestedToolHint(requestedTool)
         : hasCompatibleTool("shell", tools)
-          ? "Use SDK shell now. For creating or overwriting files, run mkdir -p for parent directories and write files with quoted heredocs. After function_call_output returns, continue."
-          : "Use SDK write now with path and fileText. After function_call_output returns, continue."
+          ? "Use the SDK mcp route for the client shell/bash tool when available, or SDK shell as fallback. For creating or overwriting files, run mkdir -p for parent directories and write files with quoted heredocs. After function_call_output returns, continue."
+          : "Use the SDK mcp route for the client write tool when available, or SDK write as fallback, with path and fileText. After function_call_output returns, continue."
   );
 }
 
@@ -986,7 +989,7 @@ function appendSdkWorkspaceMutationRequirement(
     "If the workspace is empty, stop probing after the first empty result and create the project files.",
     requestedTool
       ? requestedToolHint(requestedTool)
-      : "Use either write with path and fileText, or shell with command. Do not use edit for new files.",
+      : "Use the SDK mcp route for client write/bash when available, or SDK write/shell as fallback. Do not use edit for new files.",
     done
       ? "A file-mutating tool call has already been made. Continue from the returned tool results and run verification commands when needed."
       : requestedTool
@@ -1015,7 +1018,7 @@ function explicitlyRequestedToolName(text: string, tools: OpenAiToolSpec[]): str
 }
 
 function requestedToolHint(toolName: string): string {
-  const target = mcpTargetForClientToolName(toolName);
+  const target = mcpTargetForClientToolName(toolName, { includeMapped: true });
   if (target) {
     return `Use SDK mcp now with providerIdentifier "${target.provider}", toolName "${target.toolName}", and args matching the ${toolName} schema. Do not use SDK shell/write as a substitute for this explicitly requested client tool.`;
   }
@@ -1050,9 +1053,12 @@ function hasWorkspaceMutationCapability(tools: OpenAiToolSpec[]): boolean {
   return hasAnyCompatibleTool(["write", "shell"], tools);
 }
 
-function mcpTargetForClientToolName(name: string): { provider: string; toolName: string } | undefined {
+function mcpTargetForClientToolName(name: string, options: { includeMapped?: boolean } = {}): { provider: string; toolName: string } | undefined {
   const trimmed = name.trim();
-  if (!trimmed || isKnownMappedToolName(trimmed)) return undefined;
+  if (!trimmed) return undefined;
+  if (isKnownMappedToolName(trimmed)) {
+    return options.includeMapped ? { provider: "client", toolName: trimmed } : undefined;
+  }
   if (trimmed.startsWith("mcp__")) {
     const parts = trimmed.split("__").filter(Boolean);
     if (parts.length >= 3) return { provider: parts[1], toolName: parts.slice(2).join("__") };
@@ -1597,7 +1603,7 @@ function inferSdkCanonicalFromClientTool(args: Record<string, unknown>, tool?: O
 
 function openCodeArgsToSdkArgs(toolName: string, args: Record<string, unknown>, tool?: OpenAiToolSpec, sdkName?: string): Record<string, unknown> {
   const canonical = sdkName && KNOWN_SDK_CANONICAL_TOOLS.has(sdkName) ? sdkName : sdkToolNameForOpenCodeTool(toolName, args, tool);
-  const mcpTarget = canonical === "mcp" ? mcpTargetForClientToolName(toolName) : undefined;
+  const mcpTarget = canonical === "mcp" ? mcpTargetForClientToolName(toolName, { includeMapped: true }) : undefined;
   if (mcpTarget) {
     return {
       providerIdentifier: mcpTarget.provider,
@@ -2378,7 +2384,7 @@ function normalizedGlobArguments(args: Record<string, unknown>, context?: ToolCa
   let targetPath = firstStringArg(args, ...globPathCandidates());
   if (targetPath) targetPath = absolutizeToolPath(targetPath, context);
   if (targetPath && looksLikeGlobPattern(targetPath)) {
-    if (pattern && !looksLikeGlobPattern(pattern) && looksLikePath(pattern)) {
+    if (pattern && !looksLikeGlobPattern(pattern) && looksLikeGlobSearchRoot(pattern)) {
       const nextPattern = targetPath;
       targetPath = absolutizeToolPath(pattern, context);
       pattern = nextPattern;
@@ -2398,6 +2404,14 @@ function looksLikeGlobPattern(value: string): boolean {
 function looksLikePath(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../") || trimmed.includes("/");
+}
+
+function looksLikeGlobSearchRoot(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if ([".", "./", "..", "../"].includes(trimmed)) return true;
+  if (looksLikePath(trimmed) || trimmed.startsWith("~") || trimmed.startsWith("$")) return true;
+  return !looksLikeGlobPattern(trimmed) && !/\.[^/.]+$/.test(trimmed);
 }
 
 function splitGlobTargetPath(value: string): { path?: string; pattern?: string } {

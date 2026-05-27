@@ -1182,7 +1182,8 @@ public enum OpenAICompatibility {
         transcript.append("Client tool targets: \(tools.map(\.name).joined(separator: ", "))")
         transcript.append("These are client execution targets, not the names you should emit.")
         transcript.append("For local work, emit only SDK tool names from the SDK TOOL ROUTING MAP. The adapter forwards those SDK calls to the matching client tool names and schemas.")
-        transcript.append("When the user names a specific allowed client tool, do not substitute a different tool. Non-builtin client tools, including OpenCode MCP/server tools, should be requested with SDK mcp using providerIdentifier, toolName, and args.")
+        transcript.append("Prefer each tool's SDK mcp route when you need exact client schema arguments. Built-in SDK routes are fallback compatibility routes.")
+        transcript.append("When the user names a specific allowed client tool, use its SDK mcp route and do not substitute a different tool.")
         transcript.append("If you need a local tool, emit the tool call before prose. Do not write progress text such as \"creating the file\" instead of calling a tool.")
         if hasCompatibleTool("shell", in: tools) {
             transcript.append("A shell client tool is available. For general file creation or overwrite requests, prefer an SDK shell call using mkdir -p and a quoted heredoc.")
@@ -1217,16 +1218,8 @@ public enum OpenAICompatibility {
 
     private static func sdkRoutingRecords(tools: [OpenAIToolSpec], context: ToolCallContext?) -> [[String: Any]] {
         var routes: [[String: Any]] = []
-        for sample in sdkRoutingSamples() {
-            guard let resolved = resolveToolCall(sample, tools: tools, context: context) else { continue }
-            routes.append([
-                "sdk": sample.name,
-                "client": resolved.name,
-                "clientArgs": resolved.arguments.mapValues(\.foundationValue)
-            ])
-        }
         for tool in tools {
-            guard let target = mcpTarget(forClientToolName: tool.name) else { continue }
+            guard let target = mcpTarget(forClientToolName: tool.name, includeMapped: true) else { continue }
             routes.append([
                 "sdk": "mcp",
                 "client": tool.name,
@@ -1235,6 +1228,14 @@ public enum OpenAICompatibility {
                     "toolName": target.toolName,
                     "args": "match client schema"
                 ]
+            ])
+        }
+        for sample in sdkRoutingSamples() {
+            guard let resolved = resolveToolCall(sample, tools: tools, context: context) else { continue }
+            routes.append([
+                "sdk": sample.name,
+                "client": resolved.name,
+                "clientArgs": resolved.arguments.mapValues(\.foundationValue)
             ])
         }
         return Array(routes.prefix(24))
@@ -1262,7 +1263,7 @@ public enum OpenAICompatibility {
         var record: [String: Any] = ["name": tool.name]
         if let description = tool.description { record["description"] = description }
         if let parameters = tool.parameters { record["parameters"] = parameters.foundationValue }
-        if let target = mcpTarget(forClientToolName: tool.name) {
+        if let target = mcpTarget(forClientToolName: tool.name, includeMapped: true) {
             record["sdk_mcp"] = [
                 "providerIdentifier": target.provider,
                 "toolName": target.toolName,
@@ -1281,14 +1282,14 @@ public enum OpenAICompatibility {
             return
         }
         if hasCompatibleTool("shell", in: tools) {
-            transcript.append("Use SDK shell now. For creating or overwriting a file, run mkdir -p for the parent directory and write the file with a single quoted heredoc. After the client returns a LOCAL TOOL RESULT, continue.")
+            transcript.append("Use the SDK mcp route for the client shell/bash tool when available, or SDK shell as fallback. For creating or overwriting a file, run mkdir -p for the parent directory and write the file with a single quoted heredoc. After the client returns a LOCAL TOOL RESULT, continue.")
         } else {
-            transcript.append("For creating or overwriting a file, use SDK write with path and fileText. After the client returns a LOCAL TOOL RESULT, continue.")
+            transcript.append("For creating or overwriting a file, use the SDK mcp route for the client write tool when available, or SDK write as fallback with path and fileText. After the client returns a LOCAL TOOL RESULT, continue.")
         }
     }
 
     private static func requestedToolHint(for toolName: String) -> String {
-        if let mcpTarget = mcpTarget(forClientToolName: toolName) {
+        if let mcpTarget = mcpTarget(forClientToolName: toolName, includeMapped: true) {
             return "Use SDK mcp now with providerIdentifier \"\(mcpTarget.provider)\", toolName \"\(mcpTarget.toolName)\", and args matching the \(toolName) schema. Do not use SDK shell/write as a substitute for this explicitly requested client tool."
         }
         if canonicalToolName(toolName) == "glob", normalizedName(toolName) != "glob" {
@@ -1323,11 +1324,11 @@ public enum OpenAICompatibility {
         return nil
     }
 
-    private static func mcpTarget(forClientToolName name: String) -> (provider: String, toolName: String)? {
+    private static func mcpTarget(forClientToolName name: String, includeMapped: Bool = false) -> (provider: String, toolName: String)? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if isKnownMappedToolName(trimmed) {
-            return nil
+            return includeMapped ? (provider: "client", toolName: trimmed) : nil
         }
         if trimmed.hasPrefix("mcp__") {
             let parts = trimmed.components(separatedBy: "__").filter { !$0.isEmpty }
@@ -1765,7 +1766,7 @@ public enum OpenAICompatibility {
     private static func sdkFeedbackArguments(for clientToolName: String, arguments: [String: JSONValue], tool: OpenAIToolSpec? = nil, sdkToolName: String? = nil) -> [String: JSONValue] {
         let canonical = sdkToolName.flatMap { isKnownSDKCanonical($0) ? $0 : nil }
             ?? sdkFeedbackToolName(for: clientToolName, arguments: arguments, tool: tool)
-        if canonical == "mcp", let target = mcpTarget(forClientToolName: clientToolName) {
+        if canonical == "mcp", let target = mcpTarget(forClientToolName: clientToolName, includeMapped: true) {
             return [
                 "providerIdentifier": .string(target.provider),
                 "toolName": .string(target.toolName),
@@ -2546,7 +2547,7 @@ public enum OpenAICompatibility {
             if looksLikeGlobPattern(absolutePath) {
                 if let patternValue = pattern?.value.stringValue,
                    !looksLikeGlobPattern(patternValue),
-                   looksLikePath(patternValue) {
+                   looksLikeGlobSearchRoot(patternValue) {
                     searchPath = NamedArgument(key: searchPath?.key ?? "path", value: .string(absolutizeToolPath(patternValue, context: context)))
                     pattern = NamedArgument(key: pattern?.key ?? "pattern", value: .string(absolutePath))
                 } else {
@@ -2594,6 +2595,19 @@ public enum OpenAICompatibility {
             || trimmed.hasPrefix("./")
             || trimmed.hasPrefix("../")
             || trimmed.contains("/")
+    }
+
+    private static func looksLikeGlobSearchRoot(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if [".", "./", "..", "../"].contains(trimmed) {
+            return true
+        }
+        if looksLikePath(trimmed) || trimmed.hasPrefix("~") || trimmed.hasPrefix("$") {
+            return true
+        }
+        return !looksLikeGlobPattern(trimmed)
+            && trimmed.range(of: #"\.[^/.]+$"#, options: .regularExpression) == nil
     }
 
     private static func shouldIncludeOptionalPath(_ value: JSONValue) -> Bool {
