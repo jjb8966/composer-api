@@ -1844,6 +1844,79 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(nested["format"] as? String, "markdown")
     }
 
+    func testChatToolResultsFeedLiveOpenCodeBuildToolsBackWithSDKArguments() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[
+            {"role":"user","content":"build a todo app"},
+            {
+              "role":"assistant",
+              "content":null,
+              "tool_calls":[
+                {"id":"call_write","type":"function","function":{"name":"write","arguments":"{\"filePath\":\"/tmp/project/src/App.tsx\",\"content\":\"export default function App() { return null }\"}"}},
+                {"id":"call_read","type":"function","function":{"name":"read","arguments":"{\"filePath\":\"/tmp/project/src/App.tsx\",\"offset\":5,\"limit\":20}"}},
+                {"id":"call_edit","type":"function","function":{"name":"edit","arguments":"{\"filePath\":\"/tmp/project/src/App.tsx\",\"oldString\":\"return null\",\"newString\":\"return <main />\"}"}},
+                {"id":"call_glob","type":"function","function":{"name":"glob","arguments":"{\"pattern\":\"**/*.tsx\",\"path\":\"/tmp/project/src\"}"}},
+                {"id":"call_todo","type":"function","function":{"name":"todowrite","arguments":"{\"todos\":[{\"content\":\"Build app\",\"status\":\"in_progress\",\"priority\":\"high\"}]}"}},
+                {"id":"call_task","type":"function","function":{"name":"task","arguments":"{\"description\":\"Inspect app\",\"prompt\":\"Find the app entry point\",\"subagent_type\":\"explore\"}"}},
+                {"id":"call_skill","type":"function","function":{"name":"skill","arguments":"{\"name\":\"customize-opencode\"}"}}
+              ]
+            },
+            {"role":"tool","tool_call_id":"call_write","content":"{\"content\":\"ok\"}"},
+            {"role":"tool","tool_call_id":"call_read","content":"export default function App() { return null }"},
+            {"role":"tool","tool_call_id":"call_edit","content":"{\"diff\":\"updated App\"}"},
+            {"role":"tool","tool_call_id":"call_glob","content":"{\"files\":[\"src/App.tsx\"]}"},
+            {"role":"tool","tool_call_id":"call_todo","content":"{\"content\":\"ok\"}"},
+            {"role":"tool","tool_call_id":"call_task","content":"{\"content\":\"entry point is src/App.tsx\"}"},
+            {"role":"tool","tool_call_id":"call_skill","content":"{\"content\":\"loaded\"}"}
+          ],
+          "tools":[
+            {"type":"function","function":{"name":"write","parameters":{"type":"object","properties":{"filePath":{"type":"string"},"content":{"type":"string"}},"required":["filePath","content"]}}},
+            {"type":"function","function":{"name":"read","parameters":{"type":"object","properties":{"filePath":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["filePath"]}}},
+            {"type":"function","function":{"name":"edit","parameters":{"type":"object","properties":{"filePath":{"type":"string"},"oldString":{"type":"string"},"newString":{"type":"string"}},"required":["filePath","oldString","newString"]}}},
+            {"type":"function","function":{"name":"glob","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"]}}},
+            {"type":"function","function":{"name":"todowrite","parameters":{"type":"object","properties":{"todos":{"type":"array"}},"required":["todos"]}}},
+            {"type":"function","function":{"name":"task","parameters":{"type":"object","properties":{"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"}},"required":["description","prompt","subagent_type"]}}},
+            {"type":"function","function":{"name":"skill","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}}
+          ]
+        }
+        """#.utf8))
+
+        let prefix = "LOCAL TOOL RESULT: "
+        let feedback = try prepared.prompt
+            .split(separator: "\n")
+            .filter { $0.hasPrefix(prefix) }
+            .map { line -> [String: Any] in
+                let json = String(line.dropFirst(prefix.count))
+                let data = Data(json.utf8)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            }
+
+        XCTAssertEqual(feedback.compactMap { $0["toolName"] as? String }, ["write", "read", "edit", "glob", "todowrite", "mcp", "mcp"])
+        let arguments = try feedback.map { try XCTUnwrap($0["arguments"] as? [String: Any]) }
+        XCTAssertEqual(arguments[0]["path"] as? String, "/tmp/project/src/App.tsx")
+        XCTAssertEqual(arguments[0]["fileText"] as? String, "export default function App() { return null }")
+        XCTAssertEqual(arguments[1]["path"] as? String, "/tmp/project/src/App.tsx")
+        XCTAssertEqual((arguments[1]["offset"] as? NSNumber)?.doubleValue, 5)
+        XCTAssertEqual((arguments[1]["limit"] as? NSNumber)?.doubleValue, 20)
+        XCTAssertEqual(arguments[2]["path"] as? String, "/tmp/project/src/App.tsx")
+        XCTAssertEqual(arguments[2]["oldString"] as? String, "return null")
+        XCTAssertEqual(arguments[2]["newString"] as? String, "return <main />")
+        XCTAssertEqual(arguments[3]["targetDirectory"] as? String, "/tmp/project/src")
+        XCTAssertEqual(arguments[3]["globPattern"] as? String, "**/*.tsx")
+        let todos = try XCTUnwrap(arguments[4]["todos"] as? [[String: Any]])
+        XCTAssertEqual(todos.first?["content"] as? String, "Build app")
+        XCTAssertEqual(arguments[5]["providerIdentifier"] as? String, "client")
+        XCTAssertEqual(arguments[5]["toolName"] as? String, "task")
+        let taskArgs = try XCTUnwrap(arguments[5]["args"] as? [String: Any])
+        XCTAssertEqual(taskArgs["subagent_type"] as? String, "explore")
+        XCTAssertEqual(arguments[6]["providerIdentifier"] as? String, "client")
+        XCTAssertEqual(arguments[6]["toolName"] as? String, "skill")
+        let skillArgs = try XCTUnwrap(arguments[6]["args"] as? [String: Any])
+        XCTAssertEqual(skillArgs["name"] as? String, "customize-opencode")
+    }
+
     func testChatToolResultsFeedFindBackAsSDKGlobCalls() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
@@ -3589,6 +3662,136 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual((arguments[5]["limit"] as? NSNumber)?.doubleValue, 10)
         XCTAssertEqual(arguments[6]["path"] as? String, "src")
         XCTAssertEqual((arguments[6]["limit"] as? NSNumber)?.doubleValue, 50)
+    }
+
+    func testChatToolCallsMapLiveOpenCodeBuildToolMatrix() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[
+            {"role":"system","content":"Environment:\n  Working directory: /tmp/project\n  Workspace root folder: /tmp/project"},
+            {"role":"user","content":"work in the project"}
+          ],
+          "tools":[
+            {"type":"function","function":{"name":"bash","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer"},"workdir":{"type":"string"},"description":{"type":"string"}},"required":["command","description"]}}},
+            {"type":"function","function":{"name":"edit","parameters":{"type":"object","properties":{"filePath":{"type":"string","description":"The absolute path to the file to modify"},"oldString":{"type":"string"},"newString":{"type":"string"},"replaceAll":{"type":"boolean"}},"required":["filePath","oldString","newString"]}}},
+            {"type":"function","function":{"name":"glob","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string","description":"The directory to search in"}},"required":["pattern"]}}},
+            {"type":"function","function":{"name":"grep","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"include":{"type":"string"}},"required":["pattern"]}}},
+            {"type":"function","function":{"name":"read","parameters":{"type":"object","properties":{"filePath":{"type":"string","description":"The absolute path to the file or directory to read"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["filePath"]}}},
+            {"type":"function","function":{"name":"skill","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},
+            {"type":"function","function":{"name":"task","parameters":{"type":"object","properties":{"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"},"task_id":{"type":"string"},"command":{"type":"string"}},"required":["description","prompt","subagent_type"]}}},
+            {"type":"function","function":{"name":"todowrite","parameters":{"type":"object","properties":{"todos":{"type":"array","items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string"},"priority":{"type":"string"}},"required":["content","status","priority"]}}},"required":["todos"]}}},
+            {"type":"function","function":{"name":"webfetch","parameters":{"type":"object","properties":{"url":{"type":"string"},"format":{"anyOf":[{"type":"string","enum":["text","markdown","html"]},{"type":"null"}]},"timeout":{"type":"number"}},"required":["url"]}}},
+            {"type":"function","function":{"name":"write","parameters":{"type":"object","properties":{"content":{"type":"string"},"filePath":{"type":"string","description":"The absolute path to the file to write (must be absolute, not relative)"}},"required":["content","filePath"]}}}
+          ]
+        }
+        """#.utf8))
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [
+                CursorToolCall(name: "shell", arguments: [
+                    "command": .string("npm test"),
+                    "timeout": .number(120_000),
+                    "workingDirectory": .string("/tmp/project")
+                ]),
+                CursorToolCall(name: "read", arguments: ["path": .string("src/App.tsx"), "offset": .number(5), "limit": .number(20)]),
+                CursorToolCall(name: "write", arguments: ["path": .string("src/App.tsx"), "fileText": .string("export default function App() { return null }")]),
+                CursorToolCall(name: "edit", arguments: [
+                    "path": .string("src/App.tsx"),
+                    "oldString": .string("return null"),
+                    "newString": .string("return <main />"),
+                    "replaceAll": .bool(true)
+                ]),
+                CursorToolCall(name: "glob", arguments: ["targetDirectory": .string("src"), "globPattern": .string("**/*.tsx")]),
+                CursorToolCall(name: "grep", arguments: ["pattern": .string("TODO"), "path": .string("src"), "glob": .string("*.tsx")]),
+                CursorToolCall(name: "todowrite", arguments: [
+                    "todos": .array([.object(["content": .string("Build app"), "status": .string("in_progress"), "priority": .string("high")])])
+                ]),
+                CursorToolCall(name: "delete", arguments: ["path": .string("src/old.tsx")]),
+                CursorToolCall(name: "ls", arguments: ["path": .string("src")]),
+                CursorToolCall(name: "semsearch", arguments: ["query": .string("submit button"), "targetDirectories": .array([.string("src")])]),
+                CursorToolCall(name: "mcp", arguments: [
+                    "providerIdentifier": .string("client"),
+                    "toolName": .string("webfetch"),
+                    "args": .object(["url": .string("https://example.com"), "format": .string("markdown"), "timeout": .number(10)])
+                ]),
+                CursorToolCall(name: "mcp", arguments: [
+                    "providerIdentifier": .string("client"),
+                    "toolName": .string("task"),
+                    "args": .object([
+                        "description": .string("Inspect app"),
+                        "prompt": .string("Find the app entry point"),
+                        "subagent_type": .string("explore"),
+                        "command": .string("inspect")
+                    ])
+                ]),
+                CursorToolCall(name: "mcp", arguments: [
+                    "providerIdentifier": .string("client"),
+                    "toolName": .string("skill"),
+                    "args": .object(["name": .string("customize-opencode")])
+                ])
+            ], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        XCTAssertEqual(toolCalls.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }, [
+            "bash",
+            "read",
+            "write",
+            "edit",
+            "glob",
+            "grep",
+            "todowrite",
+            "bash",
+            "glob",
+            "bash",
+            "webfetch",
+            "task",
+            "skill"
+        ])
+
+        let arguments = try toolCalls.map { try decodedArguments(try XCTUnwrap($0["function"] as? [String: Any])) }
+        XCTAssertEqual(arguments[0]["command"] as? String, "npm test")
+        XCTAssertEqual(arguments[0]["description"] as? String, "Run npm test")
+        XCTAssertEqual(arguments[0]["workdir"] as? String, "/tmp/project")
+        XCTAssertEqual((arguments[0]["timeout"] as? NSNumber)?.doubleValue, 120_000)
+        XCTAssertEqual(arguments[1]["filePath"] as? String, "/tmp/project/src/App.tsx")
+        XCTAssertEqual((arguments[1]["offset"] as? NSNumber)?.doubleValue, 5)
+        XCTAssertEqual((arguments[1]["limit"] as? NSNumber)?.doubleValue, 20)
+        XCTAssertEqual(arguments[2]["filePath"] as? String, "/tmp/project/src/App.tsx")
+        XCTAssertEqual(arguments[2]["content"] as? String, "export default function App() { return null }")
+        XCTAssertEqual(arguments[3]["filePath"] as? String, "/tmp/project/src/App.tsx")
+        XCTAssertEqual(arguments[3]["oldString"] as? String, "return null")
+        XCTAssertEqual(arguments[3]["newString"] as? String, "return <main />")
+        XCTAssertEqual(arguments[3]["replaceAll"] as? Bool, true)
+        XCTAssertEqual(arguments[4]["pattern"] as? String, "**/*.tsx")
+        XCTAssertEqual(arguments[4]["path"] as? String, "/tmp/project/src")
+        XCTAssertEqual(arguments[5]["pattern"] as? String, "TODO")
+        XCTAssertEqual(arguments[5]["path"] as? String, "src")
+        XCTAssertEqual(arguments[5]["include"] as? String, "*.tsx")
+        let todos = try XCTUnwrap(arguments[6]["todos"] as? [[String: Any]])
+        XCTAssertEqual(todos.first?["content"] as? String, "Build app")
+        XCTAssertEqual(todos.first?["status"] as? String, "in_progress")
+        XCTAssertEqual(todos.first?["priority"] as? String, "high")
+        XCTAssertEqual(arguments[7]["command"] as? String, "rm -rf 'src/old.tsx'")
+        XCTAssertEqual(arguments[7]["description"] as? String, "Run rm -rf 'src/old.tsx'")
+        XCTAssertEqual(arguments[8]["pattern"] as? String, "*")
+        XCTAssertEqual(arguments[8]["path"] as? String, "src")
+        XCTAssertEqual(arguments[9]["command"] as? String, "rg --line-number --color never --hidden 'submit button' 'src'")
+        XCTAssertEqual(arguments[9]["description"] as? String, "Run rg --line-number --color never --hidden 'submit button' 'src'")
+        XCTAssertEqual(arguments[10]["url"] as? String, "https://example.com")
+        XCTAssertEqual(arguments[10]["format"] as? String, "markdown")
+        XCTAssertEqual((arguments[10]["timeout"] as? NSNumber)?.doubleValue, 10)
+        XCTAssertEqual(arguments[11]["description"] as? String, "Inspect app")
+        XCTAssertEqual(arguments[11]["prompt"] as? String, "Find the app entry point")
+        XCTAssertEqual(arguments[11]["subagent_type"] as? String, "explore")
+        XCTAssertEqual(arguments[11]["command"] as? String, "inspect")
+        XCTAssertEqual(arguments[12]["name"] as? String, "customize-opencode")
     }
 
     func testChatToolCallsMapSDKAliasNamesToClientSchemas() throws {

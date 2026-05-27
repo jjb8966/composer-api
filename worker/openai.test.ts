@@ -446,6 +446,197 @@ describe("OpenAI compatibility adapter", () => {
     ]);
   });
 
+  it("maps the live OpenCode build tool matrix including unique client tools", () => {
+    const openCodeBuildTools = [
+      {
+        name: "bash",
+        parameters: {
+          type: "object",
+          properties: {
+            command: { type: "string" },
+            timeout: { type: "integer" },
+            workdir: { type: "string" },
+            description: { type: "string" }
+          },
+          required: ["command", "description"]
+        }
+      },
+      {
+        name: "edit",
+        parameters: {
+          type: "object",
+          properties: {
+            filePath: { type: "string", description: "The absolute path to the file to modify" },
+            oldString: { type: "string" },
+            newString: { type: "string" },
+            replaceAll: { type: "boolean" }
+          },
+          required: ["filePath", "oldString", "newString"]
+        }
+      },
+      {
+        name: "glob",
+        parameters: {
+          type: "object",
+          properties: {
+            pattern: { type: "string" },
+            path: { type: "string", description: "The directory to search in" }
+          },
+          required: ["pattern"]
+        }
+      },
+      {
+        name: "grep",
+        parameters: {
+          type: "object",
+          properties: {
+            pattern: { type: "string" },
+            path: { type: "string" },
+            include: { type: "string" }
+          },
+          required: ["pattern"]
+        }
+      },
+      {
+        name: "read",
+        parameters: {
+          type: "object",
+          properties: {
+            filePath: { type: "string", description: "The absolute path to the file or directory to read" },
+            offset: { type: "integer" },
+            limit: { type: "integer" }
+          },
+          required: ["filePath"]
+        }
+      },
+      {
+        name: "skill",
+        parameters: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"]
+        }
+      },
+      {
+        name: "task",
+        parameters: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            prompt: { type: "string" },
+            subagent_type: { type: "string" },
+            task_id: { type: "string" },
+            command: { type: "string" }
+          },
+          required: ["description", "prompt", "subagent_type"]
+        }
+      },
+      {
+        name: "todowrite",
+        parameters: {
+          type: "object",
+          properties: {
+            todos: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  content: { type: "string" },
+                  status: { type: "string" },
+                  priority: { type: "string" }
+                },
+                required: ["content", "status", "priority"]
+              }
+            }
+          },
+          required: ["todos"]
+        }
+      },
+      {
+        name: "webfetch",
+        parameters: {
+          type: "object",
+          properties: {
+            url: { type: "string" },
+            format: { anyOf: [{ type: "string", enum: ["text", "markdown", "html"] }, { type: "null" }] },
+            timeout: { type: "number" }
+          },
+          required: ["url"]
+        }
+      },
+      {
+        name: "write",
+        parameters: {
+          type: "object",
+          properties: {
+            content: { type: "string" },
+            filePath: { type: "string", description: "The absolute path to the file to write (must be absolute, not relative)" }
+          },
+          required: ["content", "filePath"]
+        }
+      }
+    ];
+
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: openCodeBuildTools,
+      context: { workingDirectory: "/tmp/project" },
+      toolCalls: [
+        { name: "shell", arguments: { command: "npm test", timeout: 120_000, workingDirectory: "/tmp/project" } },
+        { name: "read", arguments: { path: "src/App.tsx", offset: 5, limit: 20 } },
+        { name: "write", arguments: { path: "src/App.tsx", fileText: "export default function App() { return null }" } },
+        { name: "edit", arguments: { path: "src/App.tsx", oldString: "return null", newString: "return <main />", replaceAll: true } },
+        { name: "glob", arguments: { targetDirectory: "src", globPattern: "**/*.tsx" } },
+        { name: "grep", arguments: { pattern: "TODO", path: "src", glob: "*.tsx" } },
+        { name: "todowrite", arguments: { todos: [{ content: "Build app", status: "in_progress", priority: "high" }] } },
+        { name: "delete", arguments: { path: "src/old.tsx" } },
+        { name: "ls", arguments: { path: "src" } },
+        { name: "semsearch", arguments: { query: "submit button", targetDirectories: ["src"] } },
+        { name: "mcp", arguments: { providerIdentifier: "client", toolName: "webfetch", args: { url: "https://example.com", format: "markdown", timeout: 10 } } },
+        {
+          name: "mcp",
+          arguments: {
+            providerIdentifier: "client",
+            toolName: "task",
+            args: { description: "Inspect app", prompt: "Find the app entry point", subagent_type: "explore", command: "inspect" }
+          }
+        },
+        { name: "mcp", arguments: { providerIdentifier: "client", toolName: "skill", args: { name: "customize-opencode" } } }
+      ]
+    });
+
+    expect(toolCalls.map((call) => call.function.name)).toEqual([
+      "bash",
+      "read",
+      "write",
+      "edit",
+      "glob",
+      "grep",
+      "todowrite",
+      "bash",
+      "glob",
+      "bash",
+      "webfetch",
+      "task",
+      "skill"
+    ]);
+    expect(toolCalls.map((call) => JSON.parse(call.function.arguments))).toEqual([
+      { command: "npm test", timeout: 120_000, workdir: "/tmp/project", description: "Runs npm test" },
+      { filePath: "/tmp/project/src/App.tsx", offset: 5, limit: 20 },
+      { filePath: "/tmp/project/src/App.tsx", content: "export default function App() { return null }" },
+      { filePath: "/tmp/project/src/App.tsx", oldString: "return null", newString: "return <main />", replaceAll: true },
+      { pattern: "**/*.tsx", path: "/tmp/project/src" },
+      { pattern: "TODO", path: "src", include: "*.tsx" },
+      { todos: [{ content: "Build app", status: "in_progress", priority: "high" }] },
+      { command: "rm -rf 'src/old.tsx'", description: "Runs rm -rf 'src/old.tsx'" },
+      { pattern: "*", path: "src" },
+      { command: "rg --line-number --color never --hidden 'submit button' 'src'", description: "Runs rg --line-number --color never --hidden" },
+      { url: "https://example.com", format: "markdown", timeout: 10 },
+      { description: "Inspect app", prompt: "Find the app entry point", subagent_type: "explore", command: "inspect" },
+      { name: "customize-opencode" }
+    ]);
+  });
+
   it("keeps direct chat tools on direct tool-call syntax", () => {
     const prepared = prepareChatRequest(
       {
@@ -1350,6 +1541,91 @@ describe("OpenAI compatibility adapter", () => {
       }
     });
     expect(feedback.result).toEqual({ status: "success", value: { content: "ok" } });
+  });
+
+  it("feeds live OpenCode build tool results back with SDK-compatible names and arguments", () => {
+    const fileText = "export default function App() { return null }";
+    const prepared = prepareOpencodeSdkChatRequest(
+      {
+        model: "composer-2.5-sdk",
+        messages: [
+          { role: "user", content: "build a todo app" },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              { id: "call_write", type: "function", function: { name: "write", arguments: JSON.stringify({ filePath: "/tmp/project/src/App.tsx", content: fileText }) } },
+              { id: "call_read", type: "function", function: { name: "read", arguments: JSON.stringify({ filePath: "/tmp/project/src/App.tsx", offset: 5, limit: 20 }) } },
+              { id: "call_edit", type: "function", function: { name: "edit", arguments: JSON.stringify({ filePath: "/tmp/project/src/App.tsx", oldString: "return null", newString: "return <main />" }) } },
+              { id: "call_glob", type: "function", function: { name: "glob", arguments: JSON.stringify({ pattern: "**/*.tsx", path: "/tmp/project/src" }) } },
+              { id: "call_todo", type: "function", function: { name: "todowrite", arguments: JSON.stringify({ todos: [{ content: "Build app", status: "in_progress", priority: "high" }] }) } },
+              { id: "call_task", type: "function", function: { name: "task", arguments: JSON.stringify({ description: "Inspect app", prompt: "Find the app entry point", subagent_type: "explore" }) } },
+              { id: "call_skill", type: "function", function: { name: "skill", arguments: JSON.stringify({ name: "customize-opencode" }) } }
+            ]
+          },
+          { role: "tool", tool_call_id: "call_write", content: "{\"content\":\"ok\"}" },
+          { role: "tool", tool_call_id: "call_read", content: fileText },
+          { role: "tool", tool_call_id: "call_edit", content: "{\"diff\":\"updated App\"}" },
+          { role: "tool", tool_call_id: "call_glob", content: "{\"files\":[\"src/App.tsx\"]}" },
+          { role: "tool", tool_call_id: "call_todo", content: "{\"content\":\"ok\"}" },
+          { role: "tool", tool_call_id: "call_task", content: "{\"content\":\"entry point is src/App.tsx\"}" },
+          { role: "tool", tool_call_id: "call_skill", content: "{\"content\":\"loaded\"}" }
+        ],
+        tools: [
+          {
+            name: "write",
+            input_schema: { type: "object", properties: { filePath: { type: "string" }, content: { type: "string" } }, required: ["filePath", "content"] }
+          },
+          {
+            name: "read",
+            input_schema: { type: "object", properties: { filePath: { type: "string" }, offset: { type: "integer" }, limit: { type: "integer" } }, required: ["filePath"] }
+          },
+          {
+            name: "edit",
+            input_schema: { type: "object", properties: { filePath: { type: "string" }, oldString: { type: "string" }, newString: { type: "string" } }, required: ["filePath", "oldString", "newString"] }
+          },
+          {
+            name: "glob",
+            input_schema: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" } }, required: ["pattern"] }
+          },
+          {
+            name: "todowrite",
+            input_schema: { type: "object", properties: { todos: { type: "array" } }, required: ["todos"] }
+          },
+          {
+            name: "task",
+            input_schema: {
+              type: "object",
+              properties: { description: { type: "string" }, prompt: { type: "string" }, subagent_type: { type: "string" } },
+              required: ["description", "prompt", "subagent_type"]
+            }
+          },
+          {
+            name: "skill",
+            input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] }
+          }
+        ]
+      },
+      { id: "composer-2.5-sdk" }
+    );
+
+    const feedback = prepared.prompt.text
+      .split("\n")
+      .filter((item) => item.startsWith("LOCAL OPENCODE TOOL RESULT: "))
+      .map((line) => JSON.parse(line.slice("LOCAL OPENCODE TOOL RESULT: ".length)));
+
+    expect(feedback.map((item) => item.name)).toEqual(["write", "read", "edit", "glob", "todowrite", "mcp", "mcp"]);
+    expect(feedback.map((item) => item.args)).toEqual([
+      { path: "/tmp/project/src/App.tsx", fileText },
+      { path: "/tmp/project/src/App.tsx", offset: 5, limit: 20 },
+      { path: "/tmp/project/src/App.tsx", oldString: "return null", newString: "return <main />" },
+      { targetDirectory: "/tmp/project/src", globPattern: "**/*.tsx" },
+      { todos: [{ content: "Build app", status: "in_progress", priority: "high" }] },
+      { providerIdentifier: "client", toolName: "task", args: { description: "Inspect app", prompt: "Find the app entry point", subagent_type: "explore" } },
+      { providerIdentifier: "client", toolName: "skill", args: { name: "customize-opencode" } }
+    ]);
+    expect(feedback[0].result.value).toMatchObject({ path: "/tmp/project/src/App.tsx", linesCreated: 1 });
+    expect(feedback[3].result.value).toMatchObject({ files: ["src/App.tsx"], totalFiles: 1 });
   });
 
   it("feeds find client tool results back as completed SDK glob calls", () => {

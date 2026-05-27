@@ -2777,13 +2777,16 @@ public enum OpenAICompatibility {
         if patchStyleFileToolSupports(canonical, tool: tool, properties: properties) {
             return true
         }
+        let toolCanonical = canonicalToolName(tool.name)
         switch canonical {
         case "shell":
             return has(["command", "cmd", "script", "input"])
         case "write":
             return has(pathPropertyAliases()) && has(["fileText", "file_text", "content", "contents", "text", "fileContent", "file_content"])
-        case "read", "delete":
+        case "read":
             return has(pathPropertyAliases())
+        case "delete":
+            return toolCanonical == "delete" && has(pathPropertyAliases())
         case "edit":
             return has(pathPropertyAliases())
                 && has(["oldString", "old_string", "old_str", "old", "oldText", "old_text", "search", "searchString", "search_string"])
@@ -2799,7 +2802,7 @@ public enum OpenAICompatibility {
         case "mcp":
             return has(["toolName", "tool_name", "tool", "name"])
         case "semsearch":
-            return has(["query", "pattern", "search"])
+            return toolCanonical == "semsearch" && has(["query", "pattern", "search"])
         case "todowrite":
             return has(["todos", "todoList", "todo_list", "items"])
         default:

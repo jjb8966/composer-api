@@ -1893,14 +1893,16 @@ function schemaLooksCompatible(emittedName: string, tool: OpenAiToolSpec): boole
   if (patchStyleFileToolSupports(canonical, tool)) {
     return true;
   }
+  const toolCanonical = canonicalToolName(tool.name);
   switch (canonical) {
     case "shell":
       return has(["command", "cmd", "script", "input"]);
     case "write":
       return has(pathCandidates()) && has(["fileText", "file_text", "content", "contents", "text", "fileContent", "file_content"]);
     case "read":
-    case "delete":
       return has(pathCandidates());
+    case "delete":
+      return toolCanonical === "delete" && has(pathCandidates());
     case "edit":
       return has(pathCandidates())
         && has(["oldString", "old_string", "old_str", "old", "oldText", "old_text", "search", "searchString", "search_string"])
@@ -1916,7 +1918,7 @@ function schemaLooksCompatible(emittedName: string, tool: OpenAiToolSpec): boole
     case "mcp":
       return has(["toolName", "tool_name", "tool", "name"]);
     case "semsearch":
-      return has(["query", "pattern", "search"]);
+      return toolCanonical === "semsearch" && has(["query", "pattern", "search"]);
     case "todowrite":
       return has(["todos", "todoList", "todo_list", "items"]);
     default:
