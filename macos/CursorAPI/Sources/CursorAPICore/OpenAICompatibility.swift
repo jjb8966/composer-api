@@ -2124,9 +2124,10 @@ public enum OpenAICompatibility {
            let wrapper = wrapperObjectArgumentProperty(tool: tool, properties: properties),
            !(canonical == "mcp" && isMCPWrapperTool(properties: properties)) {
             let nestedTool = OpenAIToolSpec(name: tool.name, description: tool.description, parameters: wrapper.schema)
-            return [
+            let output: [String: JSONValue] = [
                 wrapper.key: .object(normalizeArguments(arguments, sdkToolName: sdkToolName, tool: nestedTool, wrapperDepth: wrapperDepth + 1, context: context))
             ]
+            return finalizedToolArguments(output, source: arguments, sdkToolName: sdkToolName, tool: tool, context: context)
         }
 
         if selectedTool == "strreplaceeditor",
@@ -2375,16 +2376,22 @@ public enum OpenAICompatibility {
         if let value = object["const"] {
             return value
         }
-        if case .array(let values)? = object["enum"],
-           let first = values.first {
-            return first
-        }
-
         let canonical = canonicalToolName(sdkToolName)
         let normalizedProperty = normalizedName(property)
         let types = schemaJSONTypes(object)
         let hasType: (String) -> Bool = { type in types.isEmpty || types.contains(type) }
 
+        if ["action", "operation", "op", "mode", "tool", "toolname"].contains(normalizedProperty), hasType("string") {
+            let value = operationValue(for: canonical, property: property, tool: tool)
+            let allowed = stringEnumValues(for: property, tool: tool)
+            if allowed.isEmpty || allowed.contains(where: { normalizedName($0) == normalizedName(value) }) {
+                return .string(value)
+            }
+        }
+        if case .array(let values)? = object["enum"],
+           let first = values.first {
+            return first
+        }
         if ["description", "desc", "summary", "reason", "explanation"].contains(normalizedProperty), hasType("string") {
             return .string(requiredDescriptionArgument(sdkToolName: sdkToolName, output: output, source: source))
         }
