@@ -3734,6 +3734,9 @@ public enum OpenAICompatibility {
     }
 
     private static func toolArgumentsSatisfySchema(_ arguments: [String: JSONValue], tool: OpenAIToolSpec) -> Bool {
+        if !toolArgumentsSatisfyConditionalSchemas(arguments, tool: tool) {
+            return false
+        }
         let shape = parameterSchemaShape(tool.parameters)
         guard !shape.propertyOrder.isEmpty else { return true }
         for required in shape.required {
@@ -3752,6 +3755,36 @@ public enum OpenAICompatibility {
             }
         }
         return true
+    }
+
+    private static func toolArgumentsSatisfyConditionalSchemas(_ arguments: [String: JSONValue], tool: OpenAIToolSpec) -> Bool {
+        conditionalSchemasSatisfied(value: .object(arguments), schema: tool.parameters, root: tool.parameters, depth: 0)
+    }
+
+    private static func conditionalSchemasSatisfied(value: JSONValue, schema: JSONValue?, root: JSONValue?, depth: Int) -> Bool {
+        guard depth <= 5 else { return true }
+        let canonicalSchema = schemaWithInheritedDefinitions(schema, root: root)
+        guard let object = canonicalParameterSchemaObject(canonicalSchema, root: root ?? canonicalSchema, depth: depth, seenRefs: []) else {
+            return true
+        }
+        let rootObject = JSONValue.object(object)
+        if let ifSchema = object["if"] {
+            let matchesIf = argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions(ifSchema, root: rootObject), required: true)
+            if matchesIf,
+               let thenSchema = object["then"],
+               !argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions(thenSchema, root: rootObject), required: true) {
+                return false
+            }
+            if !matchesIf,
+               let elseSchema = object["else"],
+               !argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions(elseSchema, root: rootObject), required: true) {
+                return false
+            }
+        }
+        let composed = composedParameterSchemas(object["allOf"])
+        return composed.allSatisfy {
+            conditionalSchemasSatisfied(value: value, schema: $0, root: root ?? canonicalSchema, depth: depth + 1)
+        }
     }
 
     private static func argumentValueSatisfiesSchema(_ value: JSONValue?, schema: JSONValue?, required: Bool) -> Bool {
@@ -3793,6 +3826,19 @@ public enum OpenAICompatibility {
         if let notSchema = object["not"],
            argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions(notSchema, root: .object(object)), required: true) {
             return false
+        }
+        if let ifSchema = object["if"] {
+            let matchesIf = argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions(ifSchema, root: .object(object)), required: true)
+            if matchesIf,
+               let thenSchema = object["then"],
+               !argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions(thenSchema, root: .object(object)), required: true) {
+                return false
+            }
+            if !matchesIf,
+               let elseSchema = object["else"],
+               !argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions(elseSchema, root: .object(object)), required: true) {
+                return false
+            }
         }
         let types = schemaJSONTypes(object)
         if !types.isEmpty, !types.contains(where: { jsonValue(value, matchesType: $0) }) {

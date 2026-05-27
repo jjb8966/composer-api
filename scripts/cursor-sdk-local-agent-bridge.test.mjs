@@ -500,6 +500,54 @@ describe("Cursor SDK local-agent bridge", () => {
     })).toBe("Invalid value for deploy_target.target: did not match any allowed schema");
   });
 
+  it("validates dynamic client MCP conditional schemas", () => {
+    const tools = clientMcpToolDefinitions([
+      {
+        name: "send_notice",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            channel: { type: "string", enum: ["email", "slack"] },
+            message: { type: "string" },
+            email: { type: "string", minLength: 3 },
+            channelId: { type: "string", pattern: "^C[A-Z0-9]+$" }
+          },
+          required: ["channel", "message"],
+          if: {
+            properties: { channel: { const: "email" } },
+            required: ["channel"]
+          },
+          then: {
+            required: ["email"]
+          },
+          else: {
+            required: ["channelId"]
+          }
+        }
+      }
+    ]);
+
+    expect(validateClientMcpToolCall(tools, "send_notice", {
+      channel: "email",
+      message: "Build passed",
+      email: "dev@example.com"
+    })).toBe(null);
+    expect(validateClientMcpToolCall(tools, "send_notice", {
+      channel: "slack",
+      message: "Build passed",
+      channelId: "C123"
+    })).toBe(null);
+    expect(validateClientMcpToolCall(tools, "send_notice", {
+      channel: "email",
+      message: "Build passed"
+    })).toBe("Missing required argument for send_notice: email");
+    expect(validateClientMcpToolCall(tools, "send_notice", {
+      channel: "slack",
+      message: "Build passed"
+    })).toBe("Missing required argument for send_notice: channelId");
+  });
+
   it("validates dynamic client MCP pattern properties", () => {
     const tools = clientMcpToolDefinitions([
       {

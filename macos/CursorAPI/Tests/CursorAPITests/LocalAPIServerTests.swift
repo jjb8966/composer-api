@@ -6852,6 +6852,72 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertNil(target["mode"])
     }
 
+    func testChatToolCallsAllowSpecificMCPConditionalSchema() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"use mcp"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"mcp__notify__send_notice",
+                "parameters":{
+                  "type":"object",
+                  "additionalProperties":false,
+                  "properties":{
+                    "channel":{"type":"string","enum":["email","slack"]},
+                    "message":{"type":"string"},
+                    "email":{"type":"string","minLength":3},
+                    "channelId":{"type":"string","pattern":"^C[A-Z0-9]+$"}
+                  },
+                  "required":["channel","message"],
+                  "if":{
+                    "properties":{"channel":{"const":"email"}},
+                    "required":["channel"]
+                  },
+                  "then":{
+                    "required":["email"]
+                  },
+                  "else":{
+                    "required":["channelId"]
+                  }
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "mcp", arguments: [
+            "providerIdentifier": .string("notify"),
+            "toolName": .string("send_notice"),
+            "args": .object([
+                "channel": .string("email"),
+                "message": .string("Build passed"),
+                "email": .string("dev@example.com")
+            ])
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(function["name"] as? String, "mcp__notify__send_notice")
+        XCTAssertEqual(arguments["channel"] as? String, "email")
+        XCTAssertEqual(arguments["message"] as? String, "Build passed")
+        XCTAssertEqual(arguments["email"] as? String, "dev@example.com")
+        XCTAssertNil(arguments["channelId"])
+    }
+
     func testChatToolCallsAllowSpecificMCPPatternProperties() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
@@ -8218,6 +8284,60 @@ final class LocalAPIServerTests: XCTestCase {
 
         let object = OpenAICompatibility.responseObject(
             id: "resp_mcp_oneof_invalid",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let outputItems = try XCTUnwrap(object["output"] as? [[String: Any]])
+        XCTAssertNil(outputItems.first { ($0["type"] as? String) == "function_call" })
+    }
+
+    func testResponsesFunctionCallsDoNotEmitProviderSpecificMCPToolViolatingConditionalSchema() throws {
+        let prepared = try OpenAICompatibility.prepareResponsesRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "input":"send notice",
+          "tools":[
+            {
+              "type":"function",
+              "name":"mcp__notify__send_notice",
+              "parameters":{
+                "type":"object",
+                "additionalProperties":false,
+                "properties":{
+                  "channel":{"type":"string","enum":["email","slack"]},
+                  "message":{"type":"string"},
+                  "email":{"type":"string","minLength":3},
+                  "channelId":{"type":"string","pattern":"^C[A-Z0-9]+$"}
+                },
+                "required":["channel","message"],
+                "if":{
+                  "properties":{"channel":{"const":"email"}},
+                  "required":["channel"]
+                },
+                "then":{
+                  "required":["email"]
+                },
+                "else":{
+                  "required":["channelId"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "mcp", arguments: [
+            "providerIdentifier": .string("notify"),
+            "toolName": .string("send_notice"),
+            "args": .object([
+                "channel": .string("email"),
+                "message": .string("Build passed")
+            ])
+        ])
+
+        let object = OpenAICompatibility.responseObject(
+            id: "resp_mcp_conditional_invalid",
             created: 1,
             prepared: prepared,
             output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")

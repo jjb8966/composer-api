@@ -414,6 +414,17 @@ function validateJsonSchemaValue(value, schema, path, rootSchema = schema, seenR
       && validateJsonSchemaValue(value, schema.not, path, root, new Set(seenRefs)) === null) {
     return `Invalid value for ${path}: matched disallowed schema`;
   }
+  if (isRecord(schema.if) || typeof schema.if === "boolean") {
+    const matchesIf = validateJsonSchemaValue(value, schema.if, path, root, new Set(seenRefs)) === null;
+    if (matchesIf && (isRecord(schema.then) || typeof schema.then === "boolean")) {
+      const error = validateJsonSchemaValue(value, schema.then, path, root, new Set(seenRefs));
+      if (error) return error;
+    }
+    if (!matchesIf && (isRecord(schema.else) || typeof schema.else === "boolean")) {
+      const error = validateJsonSchemaValue(value, schema.else, path, root, new Set(seenRefs));
+      if (error) return error;
+    }
+  }
 
   if (value === null && schemaAllowsNull(schema, root, seenRefs)) return null;
 
@@ -577,7 +588,9 @@ function schemaHasStructuralKeyword(schema) {
     "const",
     "contains",
     "definitions",
+    "else",
     "enum",
+    "if",
     "items",
     "maxContains",
     "maxItems",
@@ -592,6 +605,7 @@ function schemaHasStructuralKeyword(schema) {
     "properties",
     "propertyNames",
     "required",
+    "then",
     "dependentRequired",
     "dependentSchemas",
     "type",
