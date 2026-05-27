@@ -25,6 +25,7 @@ const clientMcpServerName = "client";
 const clientToolCallbackPath = "/client-tool-call";
 
 const agentCache = new Map();
+const agentRunQueues = new Map();
 const activeClientToolCaptures = new Map();
 let server = null;
 
@@ -45,6 +46,7 @@ export {
   isRetryableSDKRunError,
   normalizeSDKToolCall,
   normalizeModel,
+  runExclusiveForAgent,
   sdkRunFailureSummary,
   startServer,
   validateClientMcpToolCall,
@@ -166,6 +168,10 @@ async function streamLocalAgent(input, response) {
 }
 
 async function runLocalAgent(input, onEvent) {
+  return runExclusiveForAgent(input, () => runLocalAgentUnlocked(input, onEvent));
+}
+
+async function runLocalAgentUnlocked(input, onEvent) {
   for (let attempt = 0; ; attempt += 1) {
     let activeRun = null;
     let emittedEvent = false;
@@ -201,6 +207,27 @@ async function runLocalAgent(input, onEvent) {
       await sleep(retryDelayMs(attempt));
     } finally {
       if (timer) clearTimeout(timer);
+    }
+  }
+}
+
+async function runExclusiveForAgent(input, work) {
+  const cacheKey = agentCacheKey(input);
+  const previous = agentRunQueues.get(cacheKey) ?? Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const current = previous.catch(() => {}).then(() => gate);
+  agentRunQueues.set(cacheKey, current);
+
+  try {
+    await previous.catch(() => {});
+    return await work();
+  } finally {
+    release();
+    if (agentRunQueues.get(cacheKey) === current) {
+      agentRunQueues.delete(cacheKey);
     }
   }
 }
@@ -369,7 +396,8 @@ function localAgentCreateOptions(input) {
 
 function localAgentSendOptions(input) {
   return {
-    model: { id: input.model }
+    model: { id: input.model },
+    mcpServers: clientForwardingMcpServers(input.clientTools, agentCacheKey(input))
   };
 }
 
@@ -1654,10 +1682,9 @@ function clientMcpInputSchema(parameters) {
 }
 
 function agentCacheKey(input) {
-  const toolSignature = stableJson(input.clientTools || []);
   const digest = crypto
     .createHash("sha256")
-    .update([input.apiKey, input.model, input.workingDirectory, input.sessionKey, toolSignature].join("\0"))
+    .update([input.apiKey, input.model, input.workingDirectory, input.sessionKey].join("\0"))
     .digest("hex")
     .slice(0, 32);
   return digest;

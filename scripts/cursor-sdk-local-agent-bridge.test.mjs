@@ -10,6 +10,7 @@ import {
   isRetryableSDKRunError,
   normalizeModel,
   normalizeSDKToolCall,
+  runExclusiveForAgent,
   sdkRunFailureSummary,
   toolCallFromDelta,
   validateClientMcpToolCall
@@ -48,6 +49,71 @@ describe("Cursor SDK local-agent bridge", () => {
     expect(normalizeModel("composer-latest")).toBe("default");
     expect(normalizeModel("auto")).toBe("default");
     expect(normalizeModel("gpt-5.5")).toBe("gpt-5.5");
+  });
+
+  it("serializes overlapping runs for the same stateful SDK agent", async () => {
+    const input = {
+      apiKey: "test-key",
+      model: "default",
+      workingDirectory: "/tmp/project",
+      sessionKey: "shared-session",
+      clientTools: []
+    };
+    const order = [];
+    let releaseFirst;
+    let first;
+    const firstStarted = new Promise((resolve) => {
+      first = runExclusiveForAgent(input, async () => {
+        order.push("first:start");
+        resolve();
+        await new Promise((release) => {
+          releaseFirst = release;
+        });
+        order.push("first:end");
+        return "first";
+      });
+    });
+
+    await firstStarted;
+    const second = runExclusiveForAgent({ ...input, requestId: "second" }, async () => {
+      order.push("second:start");
+      return "second";
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(order).toEqual(["first:start"]);
+
+    releaseFirst();
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
+    expect(order).toEqual(["first:start", "first:end", "second:start"]);
+  });
+
+  it("allows different SDK sessions to run concurrently", async () => {
+    const baseInput = {
+      apiKey: "test-key",
+      model: "default",
+      workingDirectory: "/tmp/project",
+      clientTools: []
+    };
+    const order = [];
+    let releaseFirst;
+    const first = runExclusiveForAgent({ ...baseInput, sessionKey: "session-a" }, async () => {
+      order.push("first:start");
+      await new Promise((release) => {
+        releaseFirst = release;
+      });
+      return "first";
+    });
+    const second = runExclusiveForAgent({ ...baseInput, sessionKey: "session-b" }, async () => {
+      order.push("second:start");
+      return "second";
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(order).toEqual(["first:start", "second:start"]);
+    releaseFirst();
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
   });
 
   it("does not cancel SDK glob calls on directory-only partial arguments", () => {
@@ -1409,9 +1475,45 @@ describe("Cursor SDK local-agent bridge", () => {
     expect(createOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY).toMatch(/^[a-f0-9]{32}$/);
     expect(createOptions.local).not.toHaveProperty("sandboxOptions");
     expect(createOptions.local).not.toHaveProperty("settingSources");
-    expect(sendOptions).toEqual({
-      model: { id: "composer-2.5" }
-    });
+    expect(sendOptions.model).toEqual({ id: "composer-2.5" });
+    expect(sendOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY).toEqual(
+      createOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY
+    );
     expect(sendOptions).not.toHaveProperty("local");
+  });
+
+  it("keeps SDK session affinity stable while sending current tool schemas per request", () => {
+    const baseInput = {
+      apiKey: "test-key",
+      model: "composer-2.5",
+      workingDirectory: "/tmp/project",
+      sessionKey: "shared-session",
+      clientTools: []
+    };
+    const dynamicInput = {
+      ...baseInput,
+      clientTools: [
+        {
+          name: "probe_write_file",
+          parameters: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              content: { type: "string" }
+            },
+            required: ["path", "content"]
+          }
+        }
+      ]
+    };
+
+    const baseCreateOptions = localAgentCreateOptions(baseInput);
+    const dynamicCreateOptions = localAgentCreateOptions(dynamicInput);
+    const dynamicSendOptions = localAgentSendOptions(dynamicInput);
+
+    expect(dynamicCreateOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY).toEqual(
+      baseCreateOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY
+    );
+    expect(dynamicSendOptions.mcpServers.client.args[1]).toContain("probe_write_file");
   });
 });
