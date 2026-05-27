@@ -6379,6 +6379,58 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertNil(arguments["args"])
     }
 
+    func testChatToolCallsMapSDKMCPDirectPayloadFieldsToSingleWordClientTool() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"use webfetch"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"webfetch",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "url":{"type":"string"},
+                    "format":{"type":"string"}
+                  },
+                  "required":["url"],
+                  "additionalProperties":false
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "mcp", arguments: [
+            "providerIdentifier": .string("client"),
+            "toolName": .string("webfetch"),
+            "url": .string("https://example.com"),
+            "format": .string("markdown")
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+
+        XCTAssertEqual(function["name"] as? String, "webfetch")
+        XCTAssertEqual(arguments["url"] as? String, "https://example.com")
+        XCTAssertEqual(arguments["format"] as? String, "markdown")
+        XCTAssertNil(arguments["providerIdentifier"])
+        XCTAssertNil(arguments["toolName"])
+        XCTAssertNil(arguments["args"])
+    }
+
     func testChatToolCallsMapSDKMCPArgsToWrappedSingleWordClientTool() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
@@ -6731,6 +6783,60 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(nested["file_path"] as? String, "src/App.tsx")
         XCTAssertNil(arguments["providerIdentifier"])
         XCTAssertNil(arguments["args"])
+    }
+
+    func testChatToolCallsMapSDKMCPDirectPayloadFieldsToWrapperTool() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"use mcp"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"call_mcp_tool",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "serverName":{"type":"string"},
+                    "toolName":{"type":"string"},
+                    "input":{"type":"object"}
+                  },
+                  "required":["serverName","toolName","input"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "mcp", arguments: [
+            "providerIdentifier": .string("filesystem"),
+            "toolName": .string("write_file"),
+            "file_path": .string("src/App.tsx"),
+            "contents": .string("export default function App() { return null }")
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+        let nested = try XCTUnwrap(arguments["input"] as? [String: Any])
+
+        XCTAssertEqual(function["name"] as? String, "call_mcp_tool")
+        XCTAssertEqual(arguments["serverName"] as? String, "filesystem")
+        XCTAssertEqual(arguments["toolName"] as? String, "write_file")
+        XCTAssertEqual(nested["file_path"] as? String, "src/App.tsx")
+        XCTAssertEqual(nested["contents"] as? String, "export default function App() { return null }")
+        XCTAssertNil(arguments["providerIdentifier"])
+        XCTAssertNil(arguments["file_path"])
     }
 
     func testChatToolCallsMapSDKMCPArgsToStrictWrapperToolWithNestedSchema() throws {
@@ -7614,6 +7720,59 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments["content"] as? String, "export default function App() { return null }")
         XCTAssertEqual(arguments["overwrite"] as? Bool, true)
         XCTAssertNil(arguments["url"])
+    }
+
+    func testResponsesFunctionCallsMapSDKMCPDirectPayloadFieldsToProviderSpecificTool() throws {
+        let prepared = try OpenAICompatibility.prepareResponsesRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "input":"use filesystem writer",
+          "tools":[
+            {
+              "type":"function",
+              "name":"mcp__filesystem__write_file",
+              "parameters":{
+                "type":"object",
+                "additionalProperties":false,
+                "properties":{
+                  "mode":{"type":"string","enum":["write","append"]},
+                  "filePath":{"type":"string"},
+                  "content":{"type":"string"},
+                  "overwrite":{"type":"boolean"}
+                },
+                "required":["mode","filePath","content","overwrite"]
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "mcp", arguments: [
+            "providerIdentifier": .string("filesystem"),
+            "toolName": .string("write_file"),
+            "file_path": .string("src/App.tsx"),
+            "contents": .string("export default function App() { return null }"),
+            "overwrite": .bool(true)
+        ])
+
+        let object = OpenAICompatibility.responseObject(
+            id: "resp_mcp_direct_payload",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let outputItems = try XCTUnwrap(object["output"] as? [[String: Any]])
+        let functionCall = try XCTUnwrap(outputItems.first { ($0["type"] as? String) == "function_call" })
+        let arguments = try decodedArguments(functionCall)
+
+        XCTAssertEqual(functionCall["name"] as? String, "mcp__filesystem__write_file")
+        XCTAssertEqual(arguments["mode"] as? String, "write")
+        XCTAssertEqual(arguments["filePath"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments["content"] as? String, "export default function App() { return null }")
+        XCTAssertEqual(arguments["overwrite"] as? Bool, true)
+        XCTAssertNil(arguments["providerIdentifier"])
+        XCTAssertNil(arguments["toolName"])
+        XCTAssertNil(arguments["args"])
     }
 
     func testResponsesFunctionCallsMapSDKPatchContentWithoutSeparatePathToPatchOnlyTool() throws {

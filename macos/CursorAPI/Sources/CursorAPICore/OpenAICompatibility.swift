@@ -2123,8 +2123,8 @@ public enum OpenAICompatibility {
     }
 
     private static func specificMCPToolNameCandidates(arguments: [String: JSONValue]) -> [String] {
-        let provider = firstArgument(in: arguments, keys: ["providerIdentifier", "provider_identifier", "provider", "server", "serverName", "server_name"])?.value.stringValue
-        let toolName = firstArgument(in: arguments, keys: ["toolName", "tool_name", "tool", "name"])?.value.stringValue
+        let provider = firstArgument(in: arguments, keys: mcpProviderAliases())?.value.stringValue
+        let toolName = firstArgument(in: arguments, keys: mcpToolNameAliases())?.value.stringValue
         let values = [toolName, provider].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty }
         guard !values.isEmpty else { return [] }
         var candidates: [String] = []
@@ -2329,12 +2329,13 @@ public enum OpenAICompatibility {
         case "readlints":
             copyFirst(fileCollectionAliases(), as: fileCollectionAliases())
         case "mcp":
-            copyFirst(["providerIdentifier", "provider_identifier", "provider", "server", "serverName", "server_name"], as: ["provider", "server", "serverName", "server_name"])
-            copyFirst(["toolName", "tool_name", "tool", "name"], as: ["tool", "name", "tool_name"])
-            if let payloadArgument = firstArgument(in: arguments, keys: mcpPayloadAliases()),
+            copyFirst(mcpProviderAliases(), as: ["provider", "server", "serverName", "server_name"])
+            copyFirst(mcpToolNameAliases(), as: ["tool", "name", "tool_name"])
+            let payloadArgument = firstArgument(in: arguments, keys: mcpPayloadAliases())
+            let payload = mcpPayloadArguments(arguments)
+            if (payloadArgument != nil || !payload.isEmpty),
                let payloadKey = propertyName(matching: mcpPayloadAliases(), in: properties) {
-                let payload = objectArgumentValue(payloadArgument.value) ?? [:]
-                let nestedSDKToolName = firstArgument(in: arguments, keys: ["toolName", "tool_name", "tool", "name"])?.value.stringValue
+                let nestedSDKToolName = firstArgument(in: arguments, keys: mcpToolNameAliases())?.value.stringValue
                     .map(canonicalToolName) ?? sdkToolName
                 if let payloadSchema = parameterPropertySchema(payloadKey, tool: tool) {
                     let nestedTool = OpenAIToolSpec(name: tool.name, description: tool.description, parameters: payloadSchema)
@@ -2349,7 +2350,10 @@ public enum OpenAICompatibility {
                 } else {
                     output[payloadKey] = .object(payload)
                 }
-                consumed.insert(payloadArgument.key)
+                if let payloadArgument {
+                    consumed.insert(payloadArgument.key)
+                }
+                consumed.formUnion(mcpDirectPayloadArgumentKeys(arguments))
             }
         case "semsearch":
             copyFirst(semanticSearchQueryAliases(), as: semanticSearchQueryAliases())
@@ -2770,25 +2774,64 @@ public enum OpenAICompatibility {
     }
 
     private static func isMCPWrapperTool(properties: [String]) -> Bool {
-        propertyName(matching: ["providerIdentifier", "provider_identifier", "provider", "server", "serverName", "server_name"], in: properties) != nil
-            && propertyName(matching: ["toolName", "tool_name", "tool", "name"], in: properties) != nil
+        propertyName(matching: mcpProviderAliases(), in: properties) != nil
+            && propertyName(matching: mcpToolNameAliases(), in: properties) != nil
             && propertyName(matching: mcpPayloadAliases(), in: properties) != nil
     }
 
     private static func mcpPayloadArguments(_ arguments: [String: JSONValue]) -> [String: JSONValue] {
-        guard let value = firstArgument(in: arguments, keys: mcpPayloadAliases())?.value else {
-            return [:]
+        if let envelope = mcpPayloadEnvelope(arguments),
+           !envelope.payload.isEmpty {
+            return envelope.payload
         }
-        return objectArgumentValue(value) ?? [:]
+        var payload = arguments
+        for key in mcpRoutingArgumentKeys(arguments) {
+            payload.removeValue(forKey: key)
+        }
+        if let envelope = mcpPayloadEnvelope(arguments) {
+            payload.removeValue(forKey: envelope.key)
+        }
+        return payload
     }
 
     private static func mcpNestedSDKToolName(_ arguments: [String: JSONValue], fallback: String) -> String {
-        firstArgument(in: arguments, keys: ["toolName", "tool_name", "tool", "name"])?.value.stringValue
+        firstArgument(in: arguments, keys: mcpToolNameAliases())?.value.stringValue
             .map(canonicalToolName) ?? fallback
+    }
+
+    private static func mcpProviderAliases() -> [String] {
+        ["providerIdentifier", "provider_identifier", "provider", "server", "serverName", "server_name"]
+    }
+
+    private static func mcpToolNameAliases() -> [String] {
+        ["toolName", "tool_name", "tool", "name"]
     }
 
     private static func mcpPayloadAliases() -> [String] {
         ["args", "arguments", "input", "params", "parameters", "payload", "data"]
+    }
+
+    private static func mcpPayloadEnvelope(_ arguments: [String: JSONValue]) -> (key: String, payload: [String: JSONValue])? {
+        guard let argument = firstArgument(in: arguments, keys: mcpPayloadAliases()),
+              let payload = objectArgumentValue(argument.value) else {
+            return nil
+        }
+        return (argument.key, payload)
+    }
+
+    private static func mcpRoutingArgumentKeys(_ arguments: [String: JSONValue]) -> [String] {
+        [
+            firstArgument(in: arguments, keys: mcpProviderAliases())?.key,
+            firstArgument(in: arguments, keys: mcpToolNameAliases())?.key
+        ].compactMap { $0 }
+    }
+
+    private static func mcpDirectPayloadArgumentKeys(_ arguments: [String: JSONValue]) -> [String] {
+        let routing = Set(mcpRoutingArgumentKeys(arguments))
+        let envelopeKey = mcpPayloadEnvelope(arguments)?.key
+        return arguments.keys.filter { key in
+            !routing.contains(key) && key != envelopeKey
+        }
     }
 
     private static func shellFallbackCommand(_ arguments: [String: JSONValue], sdkToolName: String) -> String? {
