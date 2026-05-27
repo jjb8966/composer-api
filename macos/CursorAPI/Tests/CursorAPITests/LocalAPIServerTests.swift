@@ -6787,6 +6787,71 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments["labels"] as? [String], ["release:stable", "ui"])
     }
 
+    func testChatToolCallsAllowSpecificMCPOneOfSchema() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"use mcp"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"mcp__deploy__deploy_target",
+                "parameters":{
+                  "type":"object",
+                  "additionalProperties":false,
+                  "properties":{
+                    "target":{
+                      "oneOf":[
+                        {
+                          "type":"object",
+                          "properties":{"path":{"type":"string"}},
+                          "required":["path"]
+                        },
+                        {
+                          "type":"object",
+                          "properties":{"path":{"type":"string"},"mode":{"const":"preview"}},
+                          "required":["path","mode"]
+                        }
+                      ]
+                    }
+                  },
+                  "required":["target"]
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "mcp", arguments: [
+            "providerIdentifier": .string("deploy"),
+            "toolName": .string("deploy_target"),
+            "args": .object([
+                "target": .object([
+                    "path": .string("dist")
+                ])
+            ])
+        ])
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(toolCalls.first?["function"] as? [String: Any])
+        let arguments = try decodedArguments(function)
+        let target = try XCTUnwrap(arguments["target"] as? [String: Any])
+
+        XCTAssertEqual(function["name"] as? String, "mcp__deploy__deploy_target")
+        XCTAssertEqual(target["path"] as? String, "dist")
+        XCTAssertNil(target["mode"])
+    }
+
     func testChatToolCallsAllowSpecificMCPPatternProperties() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
@@ -8097,6 +8162,62 @@ final class LocalAPIServerTests: XCTestCase {
 
         let object = OpenAICompatibility.responseObject(
             id: "resp_mcp_array_membership_invalid",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")
+        )
+
+        let outputItems = try XCTUnwrap(object["output"] as? [[String: Any]])
+        XCTAssertNil(outputItems.first { ($0["type"] as? String) == "function_call" })
+    }
+
+    func testResponsesFunctionCallsDoNotEmitProviderSpecificMCPToolViolatingOneOfSchema() throws {
+        let prepared = try OpenAICompatibility.prepareResponsesRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "input":"deploy target",
+          "tools":[
+            {
+              "type":"function",
+              "name":"mcp__deploy__deploy_target",
+              "parameters":{
+                "type":"object",
+                "additionalProperties":false,
+                "properties":{
+                  "target":{
+                    "oneOf":[
+                      {
+                        "type":"object",
+                        "properties":{"path":{"type":"string"}},
+                        "required":["path"]
+                      },
+                      {
+                        "type":"object",
+                        "properties":{"path":{"type":"string"},"mode":{"const":"preview"}},
+                        "required":["path","mode"]
+                      }
+                    ]
+                  }
+                },
+                "required":["target"]
+              }
+            }
+          ]
+        }
+        """#.utf8))
+        let toolCall = CursorToolCall(name: "mcp", arguments: [
+            "providerIdentifier": .string("deploy"),
+            "toolName": .string("deploy_target"),
+            "args": .object([
+                "target": .object([
+                    "path": .string("dist"),
+                    "mode": .string("preview")
+                ])
+            ])
+        ])
+
+        let object = OpenAICompatibility.responseObject(
+            id: "resp_mcp_oneof_invalid",
             created: 1,
             prepared: prepared,
             output: CursorSDKOutput(text: "", toolCalls: [toolCall], agentID: "agent-test", runID: "run-test")

@@ -3780,8 +3780,11 @@ public enum OpenAICompatibility {
             return false
         }
         let oneOf = composedParameterSchemas(object["oneOf"])
-        if !oneOf.isEmpty, !oneOf.contains(where: { argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions($0, root: .object(object)), required: true) }) {
-            return false
+        if !oneOf.isEmpty {
+            let matches = oneOf.filter { argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions($0, root: .object(object)), required: true) }.count
+            if matches != 1 {
+                return false
+            }
         }
         let allOf = composedParameterSchemas(object["allOf"])
         if !allOf.isEmpty, !allOf.allSatisfy({ argumentValueSatisfiesSchema(value, schema: schemaWithInheritedDefinitions($0, root: .object(object)), required: true) }) {

@@ -461,6 +461,45 @@ describe("Cursor SDK local-agent bridge", () => {
     })).toBe("Invalid value for run_steps.labels: expected at most 1 matching item");
   });
 
+  it("validates dynamic client MCP oneOf schemas exactly", () => {
+    const tools = clientMcpToolDefinitions([
+      {
+        name: "deploy_target",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            target: {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: { path: { type: "string" } },
+                  required: ["path"]
+                },
+                {
+                  type: "object",
+                  properties: { path: { type: "string" }, mode: { const: "preview" } },
+                  required: ["path", "mode"]
+                }
+              ]
+            }
+          },
+          required: ["target"]
+        }
+      }
+    ]);
+
+    expect(validateClientMcpToolCall(tools, "deploy_target", {
+      target: { path: "dist" }
+    })).toBe(null);
+    expect(validateClientMcpToolCall(tools, "deploy_target", {
+      target: { path: "dist", mode: "preview" }
+    })).toBe("Invalid value for deploy_target.target: matched more than one allowed schema");
+    expect(validateClientMcpToolCall(tools, "deploy_target", {
+      target: { mode: "preview" }
+    })).toBe("Invalid value for deploy_target.target: did not match any allowed schema");
+  });
+
   it("validates dynamic client MCP pattern properties", () => {
     const tools = clientMcpToolDefinitions([
       {

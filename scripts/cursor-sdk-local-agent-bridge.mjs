@@ -396,8 +396,14 @@ function validateJsonSchemaValue(value, schema, path, rootSchema = schema, seenR
     return `Invalid value for ${path}: did not match any allowed schema`;
   }
   const oneOf = Array.isArray(schema.oneOf) ? schema.oneOf : [];
-  if (oneOf.length && !oneOf.some((candidate) => validateJsonSchemaValue(value, candidate, path, root, new Set(seenRefs)) === null)) {
-    return `Invalid value for ${path}: did not match any allowed schema`;
+  if (oneOf.length) {
+    const matches = oneOf.filter((candidate) => validateJsonSchemaValue(value, candidate, path, root, new Set(seenRefs)) === null).length;
+    if (matches === 0) {
+      return `Invalid value for ${path}: did not match any allowed schema`;
+    }
+    if (matches > 1) {
+      return `Invalid value for ${path}: matched more than one allowed schema`;
+    }
   }
   const allOf = Array.isArray(schema.allOf) ? schema.allOf : [];
   for (const candidate of allOf) {

@@ -365,8 +365,9 @@ wire_api = "responses"
 command = "/bin/echo"
 args = ["__API_KEY__"]
 refresh_interval_ms = 300000
+TOML
 
-[profiles.cursorapi-fast]
+  cat >"$codex_home/.codex/cursorapi-fast.config.toml" <<'TOML'
 model_provider = "cursorapi"
 model = "composer-2.5-fast"
 TOML

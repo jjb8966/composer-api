@@ -146,14 +146,6 @@ public final class AgentProvisioner: @unchecked Sendable {
         command = "/bin/echo"
         args = ["cursor-local"]
         refresh_interval_ms = 300000
-
-        [profiles.cursorapi]
-        model_provider = "cursorapi"
-        model = "composer-2.5"
-
-        [profiles.cursorapi-fast]
-        model_provider = "cursorapi"
-        model = "composer-2.5-fast"
         """
         text = replaceTOMLBlock(named: "model_providers.cursorapi.auth", in: text, replacement: "")
         text = replaceTOMLBlock(named: "model_providers.cursorapi", in: text, replacement: "")
@@ -166,6 +158,16 @@ public final class AgentProvisioner: @unchecked Sendable {
         text += block.trimmingCharacters(in: .whitespacesAndNewlines)
         text += "\n"
         try writeText(text, to: url)
+        try writeCodexProfile(name: "cursorapi", model: "composer-2.5")
+        try writeCodexProfile(name: "cursorapi-fast", model: "composer-2.5-fast")
+    }
+
+    private func writeCodexProfile(name: String, model: String) throws {
+        let text = """
+        model_provider = "cursorapi"
+        model = "\(model)"
+        """
+        try writeText(text + "\n", to: codexProfileConfigURL(name))
     }
 
     private func vscodeStatus(settings: CursorAPISettings) -> AgentIntegrationStatus {
@@ -282,11 +284,14 @@ public final class AgentProvisioner: @unchecked Sendable {
             && text.contains("[model_providers.cursorapi.auth]")
             && text.contains("command = \"/bin/echo\"")
             && text.contains("args = [\"cursor-local\"]")
-            && text.contains("[profiles.cursorapi]")
-            && text.contains("model_provider = \"cursorapi\"")
-            && text.contains("model = \"composer-2.5\"")
-            && text.contains("[profiles.cursorapi-fast]")
-            && text.contains("model = \"composer-2.5-fast\"")
+            && codexProfileConfigMatches(name: "cursorapi", model: "composer-2.5")
+            && codexProfileConfigMatches(name: "cursorapi-fast", model: "composer-2.5-fast")
+    }
+
+    private func codexProfileConfigMatches(name: String, model: String) -> Bool {
+        let text = fileText(codexProfileConfigURL(name))
+        return text.contains("model_provider = \"cursorapi\"")
+            && text.contains("model = \"\(model)\"")
     }
 
     private func vscodeConfigMatches(_ url: URL, settings: CursorAPISettings) -> Bool {
@@ -641,6 +646,10 @@ public final class AgentProvisioner: @unchecked Sendable {
 
     private func codexConfigURL() -> URL {
         homeDirectory.appending(path: ".codex/config.toml")
+    }
+
+    private func codexProfileConfigURL(_ name: String) -> URL {
+        homeDirectory.appending(path: ".codex/\(name).config.toml")
     }
 
     private func vscodeLanguageModelsURL() -> URL {

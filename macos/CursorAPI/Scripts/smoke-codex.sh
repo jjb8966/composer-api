@@ -91,12 +91,14 @@ wire_api = "responses"
 command = "/bin/echo"
 args = ["cursor-local"]
 refresh_interval_ms = 300000
+TOML
 
-[profiles.cursorapi]
+cat > "$temp_home/.codex/cursorapi.config.toml" <<TOML
 model_provider = "cursorapi"
 model = "composer-2.5"
+TOML
 
-[profiles.cursorapi-fast]
+cat > "$temp_home/.codex/cursorapi-fast.config.toml" <<TOML
 model_provider = "cursorapi"
 model = "composer-2.5-fast"
 TOML
