@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -22,6 +23,7 @@ const maxRunRetries = parseInteger(process.env.CURSOR_SDK_BRIDGE_MAX_RUN_RETRIES
 const retryBaseDelayMs = parseInteger(process.env.CURSOR_SDK_BRIDGE_RETRY_BASE_DELAY_MS, 500);
 const defaultCwd = process.env.CURSOR_SDK_WORKING_DIRECTORY || process.cwd();
 const clientMcpServerName = "client";
+const clientMcpServerMode = "--client-mcp-server";
 const clientToolCallbackPath = "/client-tool-call";
 
 const agentCache = new Map();
@@ -31,9 +33,13 @@ let server = null;
 
 if (isMainModule()) {
   installBridgeProcessHandlers();
-  startServer();
-  process.on("SIGINT", () => closeAndExit(0));
-  process.on("SIGTERM", () => closeAndExit(0));
+  if (process.argv.includes(clientMcpServerMode)) {
+    await runClientForwardingMcpServerFromEnvironment();
+  } else {
+    startServer();
+    process.on("SIGINT", () => closeAndExit(0));
+    process.on("SIGTERM", () => closeAndExit(0));
+  }
 }
 
 export {
@@ -405,14 +411,142 @@ function clientForwardingMcpServers(clientTools = [], cacheKey = "") {
     [clientMcpServerName]: {
       type: "stdio",
       command: process.execPath,
-      args: ["-e", clientForwardingMcpServerSource(clientTools)],
+      args: [fileURLToPath(import.meta.url), clientMcpServerMode],
       env: {
         CURSOR_SDK_BRIDGE_CALLBACK_URL: `http://${host}:${port}${clientToolCallbackPath}`,
         CURSOR_SDK_BRIDGE_CALLBACK_TOKEN: bridgeToken,
-        CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY: cacheKey
+        CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY: cacheKey,
+        CURSOR_SDK_BRIDGE_CLIENT_TOOLS_JSON: JSON.stringify(clientMcpToolDefinitions(clientTools))
       }
     }
   };
+}
+
+async function runClientForwardingMcpServerFromEnvironment() {
+  await runClientForwardingMcpServer({
+    tools: parseClientMcpToolsJSON(process.env.CURSOR_SDK_BRIDGE_CLIENT_TOOLS_JSON),
+    callbackUrl: process.env.CURSOR_SDK_BRIDGE_CALLBACK_URL || "",
+    callbackToken: process.env.CURSOR_SDK_BRIDGE_CALLBACK_TOKEN || "",
+    callbackCacheKey: process.env.CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY || ""
+  });
+}
+
+function parseClientMcpToolsJSON(value) {
+  if (typeof value !== "string" || !value.trim()) return clientMcpToolDefinitions([]);
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : clientMcpToolDefinitions([]);
+  } catch {
+    return clientMcpToolDefinitions([]);
+  }
+}
+
+async function runClientForwardingMcpServer({
+  tools,
+  callbackUrl,
+  callbackToken,
+  callbackCacheKey,
+  input = process.stdin,
+  output = process.stdout
+}) {
+  const rl = readline.createInterface({ input });
+  let outputClosed = false;
+  const writeOutput = (payload) => {
+    if (outputClosed) return false;
+    try {
+      return output.write(payload);
+    } catch (error) {
+      if (!isBenignPipeError(error)) throw error;
+      outputClosed = true;
+      return false;
+    }
+  };
+  output.on?.("error", (error) => {
+    outputClosed = true;
+    if (!isBenignPipeError(error)) process.exitCode = 1;
+  });
+  const send = (id, result) => {
+    if (id === undefined || id === null) return;
+    writeOutput(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+  };
+  const sendError = (id, message) => {
+    if (id === undefined || id === null) return;
+    writeOutput(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message } })}\n`);
+  };
+
+  await new Promise((resolve) => {
+    rl.on("line", async (line) => {
+      if (!line.trim()) return;
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (!message.id && String(message.method || "").startsWith("notifications/")) return;
+      if (message.method === "initialize") {
+        send(message.id, {
+          protocolVersion: "2024-11-05",
+          capabilities: { tools: {} },
+          serverInfo: { name: "api-for-cursor-client-tools", version: "0.1.0" }
+        });
+        return;
+      }
+      if (message.method === "tools/list") {
+        send(message.id, { tools });
+        return;
+      }
+      if (message.method === "tools/call") {
+        const params = message.params || {};
+        const toolName = params.name || params.toolName;
+        const toolInput = params.arguments || params.input || {};
+        const validationError = validateClientMcpToolCall(tools, toolName, toolInput);
+        if (validationError) {
+          sendError(message.id, validationError);
+          return;
+        }
+        const accepted = await notifyParentToolCall({ callbackUrl, callbackToken, callbackCacheKey, toolName, input: toolInput });
+        if (!accepted) {
+          sendError(message.id, "Outer client callback unavailable for forwarded tool call.");
+          return;
+        }
+        send(message.id, {
+          content: [{ type: "text", text: "FORWARDED_TO_OUTER_CLIENT" }],
+          isError: false
+        });
+        return;
+      }
+      sendError(message.id, `Unsupported MCP method: ${message.method}`);
+    });
+    rl.on("close", resolve);
+  });
+}
+
+async function notifyParentToolCall({ callbackUrl, callbackToken, callbackCacheKey, toolName, input }) {
+  if (!callbackUrl || !callbackCacheKey) return true;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (callbackToken) headers.Authorization = `Bearer ${callbackToken}`;
+    const response = await fetch(callbackUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        cacheKey: callbackCacheKey,
+        toolName,
+        arguments: input && typeof input === "object" && !Array.isArray(input) ? input : {}
+      }),
+      signal: controller.signal
+    });
+    if (!response.ok) return false;
+    const body = await response.json().catch(() => ({}));
+    return body && body.accepted === true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function clientForwardingMcpServerSource(clientTools = []) {

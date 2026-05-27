@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
+import { fileURLToPath } from "node:url";
 import {
   bridgePrompt,
   clientForwardingMcpServerSource,
@@ -16,6 +17,8 @@ import {
   toolCallFromDelta,
   validateClientMcpToolCall
 } from "./cursor-sdk-local-agent-bridge.mjs";
+
+const bridgeScriptPath = fileURLToPath(new URL("./cursor-sdk-local-agent-bridge.mjs", import.meta.url));
 
 describe("Cursor SDK local-agent bridge", () => {
   it("classifies retryable Cursor SDK upstream capacity errors", () => {
@@ -1472,14 +1475,14 @@ describe("Cursor SDK local-agent bridge", () => {
     await new Promise((resolve) => callbackServer.listen(0, "127.0.0.1", resolve));
     const address = callbackServer.address();
     const port = typeof address === "object" && address ? address.port : 0;
-    const source = clientForwardingMcpServerSource([]);
-    const child = spawn(process.execPath, ["-e", source], {
+    const child = spawn(process.execPath, [bridgeScriptPath, "--client-mcp-server"], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         CURSOR_SDK_BRIDGE_CALLBACK_URL: `http://127.0.0.1:${port}/client-tool-call`,
         CURSOR_SDK_BRIDGE_CALLBACK_TOKEN: "bridge-token",
-        CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY: "cache-key"
+        CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY: "cache-key",
+        CURSOR_SDK_BRIDGE_CLIENT_TOOLS_JSON: JSON.stringify(clientMcpToolDefinitions([]))
       }
     });
     let stdout = "";
@@ -1563,8 +1566,10 @@ describe("Cursor SDK local-agent bridge", () => {
     expect(createOptions.local).not.toHaveProperty("sandboxOptions");
     expect(createOptions.local).not.toHaveProperty("settingSources");
     expect(sendOptions.model).toEqual({ id: "composer-2.5" });
+    expect(sendOptions.mcpServers.client.args).toEqual([bridgeScriptPath, "--client-mcp-server"]);
     expect(sendOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_CALLBACK_URL).toContain("/client-tool-call");
     expect(sendOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY).toMatch(/^[a-f0-9]{32}$/);
+    expect(sendOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_CLIENT_TOOLS_JSON).toContain("client_shell");
     expect(sendOptions).not.toHaveProperty("local");
   });
 
@@ -1599,6 +1604,6 @@ describe("Cursor SDK local-agent bridge", () => {
     expect(dynamicSendOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY).toEqual(
       baseSendOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY
     );
-    expect(dynamicSendOptions.mcpServers.client.args[1]).toContain("probe_write_file");
+    expect(dynamicSendOptions.mcpServers.client.env.CURSOR_SDK_BRIDGE_CLIENT_TOOLS_JSON).toContain("probe_write_file");
   });
 });
