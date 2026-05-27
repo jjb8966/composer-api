@@ -119,10 +119,20 @@ base_url="http://127.0.0.1:$port/v1"
 post_json() {
   local path="$1"
   local body="$2"
-  curl -fsS --max-time "$TIMEOUT_SECONDS" "$base_url$path" \
+  local response_file
+  local http_status
+  response_file="$(mktemp "${TMPDIR:-/tmp}/api-for-cursor-live-response.XXXXXX")"
+  TEMP_FILES+=("$response_file")
+  http_status="$(curl -sS --max-time "$TIMEOUT_SECONDS" -o "$response_file" -w "%{http_code}" "$base_url$path" \
     -H "Authorization: Bearer $CURSOR_API_TEST_KEY" \
     -H "Content-Type: application/json" \
-    -d "$body"
+    -d "$body")" || fail "POST $path failed before an HTTP response"
+  if [ "$http_status" -lt 200 ] || [ "$http_status" -ge 300 ]; then
+    local error_body
+    error_body="$(head -c 1000 "$response_file" | sed -E 's/crsr_[A-Za-z0-9]+/[REDACTED]/g')"
+    fail "POST $path returned HTTP $http_status: $error_body"
+  fi
+  cat "$response_file"
 }
 
 extract_chat_content() {

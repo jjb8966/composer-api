@@ -7,12 +7,40 @@ import {
   localAgentCreateOptions,
   localAgentSendOptions,
   isForwardableSDKToolCall,
+  isRetryableSDKRunError,
   normalizeSDKToolCall,
+  sdkRunFailureSummary,
   toolCallFromDelta,
   validateClientMcpToolCall
 } from "./cursor-sdk-local-agent-bridge.mjs";
 
 describe("Cursor SDK local-agent bridge", () => {
+  it("classifies retryable Cursor SDK upstream capacity errors", () => {
+    expect(isRetryableSDKRunError(new Error("Server at capacity"))).toBe(true);
+    expect(isRetryableSDKRunError({ cause: { isRetryable: true } })).toBe(true);
+    expect(isRetryableSDKRunError({ rawMessage: "temporarily unavailable" })).toBe(true);
+    expect(isRetryableSDKRunError({ status: 429 })).toBe(true);
+    expect(isRetryableSDKRunError(new Error("Missing or invalid authorization"))).toBe(false);
+    expect(isRetryableSDKRunError({ status: 401, message: "Unauthorized" })).toBe(false);
+  });
+
+  it("treats opaque SDK error results as retryable but preserves explicit auth failures", () => {
+    expect(sdkRunFailureSummary({ status: "error" })).toMatchObject({
+      message: "",
+      retryable: true
+    });
+    expect(sdkRunFailureSummary({ status: "error", error: { message: "Server at capacity", code: "unavailable" } })).toMatchObject({
+      message: "Server at capacity",
+      code: "unavailable",
+      retryable: true
+    });
+    expect(sdkRunFailureSummary({ status: "error", error: { message: "Missing or invalid authorization", code: "unauthorized" } })).toMatchObject({
+      message: "Missing or invalid authorization",
+      code: "unauthorized",
+      retryable: false
+    });
+  });
+
   it("does not cancel SDK glob calls on directory-only partial arguments", () => {
     const partial = normalizeSDKToolCall({
       type: "glob",

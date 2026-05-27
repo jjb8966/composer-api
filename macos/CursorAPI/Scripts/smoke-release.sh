@@ -23,7 +23,8 @@ same app bundle.
   --development-package
                    Rebuild a development app bundle before verification.
   --skip-tests     Skip swift test.
-  --require-live   Fail unless CURSOR_API_TEST_KEY is set and live routing passes.
+  --require-live   Fail unless CURSOR_API_TEST_KEY is set and live routing passes,
+                   including the deep OpenCode Vite/React build.
 
 When CURSOR_API_TEST_KEY is set, this also runs the live routing smoke check.
 Without a key, the live check is skipped unless --require-live is set.
@@ -130,7 +131,15 @@ run_app_step "OpenCode provider smoke" "$ROOT_DIR/Scripts/smoke-opencode.sh" --a
 run_app_step "pi provider smoke" "$ROOT_DIR/Scripts/smoke-pi.sh" --app "$APP_PATH" --timeout "$TIMEOUT_SECONDS"
 
 if [ -n "${CURSOR_API_TEST_KEY:-}" ]; then
-  run_app_step "Live routing smoke" "$ROOT_DIR/Scripts/smoke-live-routing.sh" --app "$APP_PATH" --timeout "$TIMEOUT_SECONDS"
+  live_args=("$ROOT_DIR/Scripts/smoke-live-routing.sh" --app "$APP_PATH" --timeout "$TIMEOUT_SECONDS")
+  live_timeout=$((TIMEOUT_SECONDS + 45))
+  if [ "$REQUIRE_LIVE" -eq 1 ]; then
+    live_args+=(--deep-opencode)
+    live_timeout=$((TIMEOUT_SECONDS + 360))
+  fi
+  stop_app
+  run_step "Live routing smoke" "$live_timeout" "${live_args[@]}"
+  stop_app
 elif [ "$REQUIRE_LIVE" -eq 1 ]; then
   fail "CURSOR_API_TEST_KEY is required for --require-live"
 else

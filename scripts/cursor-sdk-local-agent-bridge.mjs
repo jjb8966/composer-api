@@ -18,6 +18,8 @@ const bridgeToken = process.env.CURSOR_SDK_BRIDGE_TOKEN || "";
 const maxJsonBytes = parseInteger(process.env.CURSOR_SDK_BRIDGE_MAX_JSON_BYTES, 1024 * 1024);
 const maxAgents = parseInteger(process.env.CURSOR_SDK_BRIDGE_MAX_AGENTS, 128);
 const runTimeoutMs = parseInteger(process.env.CURSOR_SDK_BRIDGE_RUN_TIMEOUT_MS, 180 * 1000);
+const maxRunRetries = parseInteger(process.env.CURSOR_SDK_BRIDGE_MAX_RUN_RETRIES, 3);
+const retryBaseDelayMs = parseInteger(process.env.CURSOR_SDK_BRIDGE_RETRY_BASE_DELAY_MS, 500);
 const defaultCwd = process.env.CURSOR_SDK_WORKING_DIRECTORY || process.cwd();
 const clientMcpServerName = "client";
 
@@ -38,7 +40,9 @@ export {
   localAgentCreateOptions,
   localAgentSendOptions,
   isForwardableSDKToolCall,
+  isRetryableSDKRunError,
   normalizeSDKToolCall,
+  sdkRunFailureSummary,
   startServer,
   validateClientMcpToolCall,
   toolCallFromDelta
@@ -140,25 +144,42 @@ async function streamLocalAgent(input, response) {
 }
 
 async function runLocalAgent(input, onEvent) {
-  let activeRun = null;
-  let timer = null;
-  const work = runLocalAgentBody(input, (run) => {
-    activeRun = run;
-  }, onEvent);
-  const timeout = new Promise((_resolve, reject) => {
-    timer = setTimeout(() => {
-      const error = new HttpError("Cursor SDK bridge run timed out.", 504, "cursor_sdk_timeout");
-      reject(error);
-      if (activeRun) {
-        activeRun.cancel().catch(() => {});
-      }
-    }, runTimeoutMs);
-  });
-  try {
-    return await Promise.race([work, timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-    work.catch(() => {});
+  for (let attempt = 0; ; attempt += 1) {
+    let activeRun = null;
+    let emittedEvent = false;
+    let timer = null;
+    const emit = onEvent
+      ? (event) => {
+          emittedEvent = true;
+          return onEvent(event);
+        }
+      : undefined;
+    const work = runLocalAgentBody(input, (run) => {
+      activeRun = run;
+    }, emit);
+    const timeout = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const error = new HttpError("Cursor SDK bridge run timed out.", 504, "cursor_sdk_timeout");
+        reject(error);
+        if (activeRun) {
+          activeRun.cancel().catch(() => {});
+        }
+      }, runTimeoutMs);
+    });
+
+    try {
+      return await Promise.race([work, timeout]);
+    } catch (error) {
+      work.catch(() => {});
+      const shouldRetry = attempt < maxRunRetries && !emittedEvent && isRetryableSDKRunError(error);
+      if (!shouldRetry) throw error;
+      if (activeRun) activeRun.cancel().catch(() => {});
+      evictCachedAgent(input);
+      console.warn(`Retrying Cursor SDK run after retryable upstream error (${attempt + 1}/${maxRunRetries}).`);
+      await sleep(retryDelayMs(attempt));
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }
 
@@ -239,7 +260,7 @@ async function runLocalAgentBody(input, onRun, onEvent) {
   const result = await run.wait();
   if (result.status === "error") {
     evictAgent(agentEntry.cacheKey, agent);
-    throw new HttpError("Cursor SDK run failed", 502, "cursor_sdk_error");
+    throw sdkRunFailureError(result);
   }
   if (!text && typeof result.result === "string") text = result.result;
   return {
@@ -273,6 +294,12 @@ function evictAgent(cacheKey, agent) {
   try {
     agent.close();
   } catch {}
+}
+
+function evictCachedAgent(input) {
+  const cacheKey = agentCacheKey(input);
+  const cached = agentCache.get(cacheKey);
+  if (cached) evictAgent(cacheKey, cached.agent);
 }
 
 function localAgentCreateOptions(input) {
@@ -1635,11 +1662,19 @@ function writeNdjson(response, body) {
 function installBridgeProcessHandlers() {
   process.on("unhandledRejection", (reason) => {
     if (isBenignCancellationError(reason) || isBenignPipeError(reason)) return;
+    if (isRetryableSDKRunError(reason)) {
+      console.warn("Ignored late retryable Cursor SDK upstream error.");
+      return;
+    }
     console.error(reason);
     closeAndExit(1);
   });
   process.on("uncaughtException", (error) => {
     if (isBenignCancellationError(error) || isBenignPipeError(error)) return;
+    if (isRetryableSDKRunError(error)) {
+      console.warn("Ignored late retryable Cursor SDK upstream error.");
+      return;
+    }
     console.error(error);
     closeAndExit(1);
   });
@@ -1651,6 +1686,89 @@ function isBenignCancellationError(error) {
 
 function isBenignPipeError(error) {
   return error?.code === "EPIPE" || error?.code === "ERR_STREAM_DESTROYED";
+}
+
+function isRetryableSDKRunError(error) {
+  const values = flattenErrorValues(error);
+  if (values.some((value) => value?.isRetryable === true)) return true;
+  if (values.some((value) => value?.status === 429 || value?.status === 503 || value?.code === 8 || value?.code === 14)) return true;
+  return values
+    .flatMap((value) => [value?.message, value?.rawMessage, value?.code, value?.status, value?.name])
+    .filter((value) => value !== undefined && value !== null)
+    .map((value) => String(value).toLowerCase())
+    .some((text) =>
+      text.includes("server at capacity")
+        || text.includes("temporarily unavailable")
+        || text.includes("resource exhausted")
+        || text.includes("rate limit")
+        || text.includes("too many requests")
+        || text.includes("try again")
+        || text === "unavailable"
+        || text === "resource_exhausted"
+    );
+}
+
+function sdkRunFailureError(result) {
+  const summary = sdkRunFailureSummary(result);
+  const error = new HttpError(
+    summary.message || "Cursor SDK run failed",
+    summary.retryable ? 503 : 502,
+    "cursor_sdk_error"
+  );
+  error.rawMessage = summary.message;
+  error.isRetryable = summary.retryable;
+  error.cause = summary;
+  console.warn(`Cursor SDK run returned error status${summary.code ? ` (${summary.code})` : ""}.`);
+  return error;
+}
+
+function sdkRunFailureSummary(result) {
+  const source = firstRecord(result?.error, result?.cause, result?.details, result?.result);
+  const message = firstNonEmptyString(
+    source?.message,
+    source?.rawMessage,
+    source?.error,
+    source?.details,
+    typeof result?.result === "string" ? result.result : undefined
+  );
+  const code = firstNonEmptyString(source?.code, result?.code);
+  return {
+    status: result?.status,
+    code,
+    message,
+    retryable: isRetryableSDKRunError(source) || (!message && !code)
+  };
+}
+
+function firstRecord(...values) {
+  return values.find((value) => isRecord(value)) || {};
+}
+
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function flattenErrorValues(error) {
+  const values = [];
+  const seen = new Set();
+  let current = error;
+  while (current && !seen.has(current)) {
+    values.push(current);
+    seen.add(current);
+    current = current.cause;
+  }
+  return values;
+}
+
+function retryDelayMs(attempt) {
+  return Math.min(5000, retryBaseDelayMs * 2 ** attempt);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function openAiError(error) {
