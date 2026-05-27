@@ -473,52 +473,67 @@ async function runClientForwardingMcpServer({
     if (id === undefined || id === null) return;
     writeOutput(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message } })}\n`);
   };
+  const pending = new Set();
+
+  const handleLine = async (line) => {
+    if (!line.trim()) return;
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (!message.id && String(message.method || "").startsWith("notifications/")) return;
+    if (message.method === "initialize") {
+      send(message.id, {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "api-for-cursor-client-tools", version: "0.1.0" }
+      });
+      return;
+    }
+    if (message.method === "tools/list") {
+      send(message.id, { tools });
+      return;
+    }
+    if (message.method === "tools/call") {
+      const params = message.params || {};
+      const toolName = params.name || params.toolName;
+      const toolInput = params.arguments || params.input || {};
+      const validationError = validateClientMcpToolCall(tools, toolName, toolInput);
+      if (validationError) {
+        sendError(message.id, validationError);
+        return;
+      }
+      const accepted = await notifyParentToolCall({ callbackUrl, callbackToken, callbackCacheKey, toolName, input: toolInput });
+      if (!accepted) {
+        sendError(message.id, "Outer client callback unavailable for forwarded tool call.");
+        return;
+      }
+      send(message.id, {
+        content: [{ type: "text", text: "FORWARDED_TO_OUTER_CLIENT" }],
+        isError: false
+      });
+      return;
+    }
+    sendError(message.id, `Unsupported MCP method: ${message.method}`);
+  };
 
   await new Promise((resolve) => {
-    rl.on("line", async (line) => {
-      if (!line.trim()) return;
-      let message;
-      try {
-        message = JSON.parse(line);
-      } catch {
-        return;
-      }
-      if (!message.id && String(message.method || "").startsWith("notifications/")) return;
-      if (message.method === "initialize") {
-        send(message.id, {
-          protocolVersion: "2024-11-05",
-          capabilities: { tools: {} },
-          serverInfo: { name: "api-for-cursor-client-tools", version: "0.1.0" }
+    rl.on("line", (line) => {
+      const task = handleLine(line)
+        .catch((error) => {
+          if (!isBenignPipeError(error)) process.exitCode = 1;
+        })
+        .finally(() => {
+          pending.delete(task);
         });
-        return;
-      }
-      if (message.method === "tools/list") {
-        send(message.id, { tools });
-        return;
-      }
-      if (message.method === "tools/call") {
-        const params = message.params || {};
-        const toolName = params.name || params.toolName;
-        const toolInput = params.arguments || params.input || {};
-        const validationError = validateClientMcpToolCall(tools, toolName, toolInput);
-        if (validationError) {
-          sendError(message.id, validationError);
-          return;
-        }
-        const accepted = await notifyParentToolCall({ callbackUrl, callbackToken, callbackCacheKey, toolName, input: toolInput });
-        if (!accepted) {
-          sendError(message.id, "Outer client callback unavailable for forwarded tool call.");
-          return;
-        }
-        send(message.id, {
-          content: [{ type: "text", text: "FORWARDED_TO_OUTER_CLIENT" }],
-          isError: false
-        });
-        return;
-      }
-      sendError(message.id, `Unsupported MCP method: ${message.method}`);
+      pending.add(task);
     });
-    rl.on("close", resolve);
+    rl.on("close", async () => {
+      await Promise.allSettled([...pending]);
+      resolve();
+    });
   });
 }
 

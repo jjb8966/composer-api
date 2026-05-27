@@ -1540,6 +1540,126 @@ describe("Cursor SDK local-agent bridge", () => {
     });
   });
 
+  it("keeps exact custom harness MCP tools available in the subcommand server", async () => {
+    let observedRequest;
+    const callbackServer = http.createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        observedRequest = {
+          url: request.url,
+          authorization: request.headers.authorization,
+          body: JSON.parse(body)
+        };
+        setTimeout(() => {
+          response.writeHead(200, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ ok: true, accepted: true }));
+        }, 50);
+      });
+    });
+
+    await new Promise((resolve) => callbackServer.listen(0, "127.0.0.1", resolve));
+    const address = callbackServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const tools = clientMcpToolDefinitions([
+      {
+        name: "mcp__github__create_issue",
+        description: "Create a GitHub issue through the outer harness MCP server.",
+        parameters: {
+          type: "object",
+          properties: {
+            owner: { type: "string" },
+            repo: { type: "string" },
+            title: { type: "string" },
+            body: { type: "string" }
+          },
+          required: ["owner", "repo", "title", "body"],
+          additionalProperties: false
+        }
+      }
+    ]);
+    const child = spawn(process.execPath, [bridgeScriptPath, "--client-mcp-server"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        CURSOR_SDK_BRIDGE_CALLBACK_URL: `http://127.0.0.1:${port}/client-tool-call`,
+        CURSOR_SDK_BRIDGE_CALLBACK_TOKEN: "bridge-token",
+        CURSOR_SDK_BRIDGE_AGENT_CACHE_KEY: "cache-key",
+        CURSOR_SDK_BRIDGE_CLIENT_TOOLS_JSON: JSON.stringify(tools)
+      }
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+
+    const listMessage = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list"
+    };
+    const callMessage = {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "mcp__github__create_issue",
+        arguments: {
+          owner: "octo",
+          repo: "hello",
+          title: "Smoke",
+          body: "OK"
+        }
+      }
+    };
+    child.stdin.end(`${JSON.stringify(listMessage)}\n${JSON.stringify(callMessage)}\n`);
+
+    const exitCode = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error("custom MCP forwarding server did not exit"));
+      }, 3000);
+      child.on("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.on("exit", (code) => {
+        clearTimeout(timeout);
+        resolve(code);
+      });
+    });
+    callbackServer.close();
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    const responses = stdout.trim().split(/\n+/).map((line) => JSON.parse(line));
+    const listResponse = responses.find((response) => response.id === 1);
+    const callResponse = responses.find((response) => response.id === 2);
+    expect(listResponse.result.tools.some((tool) => tool.name === "mcp__github__create_issue")).toBe(true);
+    expect(callResponse.result.content[0].text).toBe("FORWARDED_TO_OUTER_CLIENT");
+    expect(observedRequest).toEqual({
+      url: "/client-tool-call",
+      authorization: "Bearer bridge-token",
+      body: {
+        cacheKey: "cache-key",
+        toolName: "mcp__github__create_issue",
+        arguments: {
+          owner: "octo",
+          repo: "hello",
+          title: "Smoke",
+          body: "OK"
+        }
+      }
+    });
+  });
+
   it("tells the SDK to use client MCP tools instead of built-in local tools", () => {
     const prompt = bridgePrompt("USER: create a file");
 
