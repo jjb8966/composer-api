@@ -1811,13 +1811,13 @@ public enum OpenAICompatibility {
     private static func inferSDKCanonicalFromClientTool(arguments: [String: JSONValue], tool: OpenAIToolSpec?) -> String? {
         let operation = firstArgument(inRecords: arguments, keys: operationPropertyAliases())?.value.stringValue
         switch normalizedName(operation ?? "") {
-        case "write", "create", "overwrite":
+        case "write", "writefile", "create", "createfile", "overwrite", "overwritefile":
             return "write"
-        case "replace", "strreplace", "edit", "update":
+        case "replace", "replacefile", "replacetext", "strreplace", "searchreplace", "edit", "editfile", "update", "updatefile":
             return "edit"
-        case "read", "view", "open":
+        case "read", "readfile", "view", "viewfile", "open", "openfile":
             return "read"
-        case "delete", "remove":
+        case "delete", "deletefile", "remove", "removefile":
             return "delete"
         default:
             break
@@ -3743,13 +3743,13 @@ public enum OpenAICompatibility {
         let candidates: [String]
         switch canonical {
         case "write":
-            candidates = ["write", "create", "overwrite", "replace"]
+            candidates = ["write", "write_file", "create", "create_file", "overwrite", "overwrite_file", "replace", "replace_file"]
         case "read":
-            candidates = ["read", "view", "open"]
+            candidates = ["read", "read_file", "view", "view_file", "open", "open_file"]
         case "edit":
-            candidates = ["replace", "str_replace", "edit", "update"]
+            candidates = ["replace", "replace_file", "replace_text", "str_replace", "search_replace", "edit", "edit_file", "update", "update_file"]
         case "delete":
-            candidates = ["delete", "remove"]
+            candidates = ["delete", "delete_file", "remove", "remove_file"]
         default:
             candidates = [canonical]
         }

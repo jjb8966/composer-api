@@ -2194,6 +2194,71 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments[2]["path"] as? String, "src/old.tsx")
     }
 
+    func testChatToolResultsFeedCommandEnumNounOperationsBackWithSDKArguments() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[
+            {"role":"user","content":"update files"},
+            {
+              "role":"assistant",
+              "content":null,
+              "tool_calls":[
+                {"id":"call_write","type":"function","function":{"name":"workspace_file","arguments":"{\"operation\":\"create_file\",\"filePath\":\"src/App.tsx\",\"content\":\"export default function App() { return null }\"}"}},
+                {"id":"call_read","type":"function","function":{"name":"workspace_file","arguments":"{\"operation\":\"read_file\",\"filePath\":\"src/App.tsx\"}"}},
+                {"id":"call_edit","type":"function","function":{"name":"workspace_file","arguments":"{\"operation\":\"replace_text\",\"filePath\":\"src/App.tsx\",\"oldText\":\"return null\",\"newText\":\"return <main />\"}"}},
+                {"id":"call_delete","type":"function","function":{"name":"workspace_file","arguments":"{\"operation\":\"delete_file\",\"filePath\":\"src/old.tsx\"}"}}
+              ]
+            },
+            {"role":"tool","tool_call_id":"call_write","content":"wrote file"},
+            {"role":"tool","tool_call_id":"call_read","content":"read file"},
+            {"role":"tool","tool_call_id":"call_edit","content":"edited file"},
+            {"role":"tool","tool_call_id":"call_delete","content":"deleted file"}
+          ],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"workspace_file",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "operation":{"type":"string","enum":["read_file","create_file","replace_text","delete_file"]},
+                    "filePath":{"type":"string"},
+                    "content":{"type":"string"},
+                    "oldText":{"type":"string"},
+                    "newText":{"type":"string"}
+                  },
+                  "required":["operation","filePath"],
+                  "additionalProperties":false
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+
+        let prefix = "LOCAL TOOL RESULT: "
+        let feedback = try prepared.prompt
+            .split(separator: "\n")
+            .filter { $0.hasPrefix(prefix) }
+            .map { line -> [String: Any] in
+                let json = String(line.dropFirst(prefix.count))
+                let data = Data(json.utf8)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            }
+
+        XCTAssertEqual(feedback.compactMap { $0["toolName"] as? String }, ["write", "read", "edit", "delete"])
+        let arguments = try feedback.map { try XCTUnwrap($0["arguments"] as? [String: Any]) }
+        XCTAssertEqual(arguments[0]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[0]["fileText"] as? String, "export default function App() { return null }")
+        XCTAssertEqual(arguments[1]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[2]["path"] as? String, "src/App.tsx")
+        XCTAssertEqual(arguments[2]["oldString"] as? String, "return null")
+        XCTAssertEqual(arguments[2]["newString"] as? String, "return <main />")
+        XCTAssertEqual(arguments[3]["path"] as? String, "src/old.tsx")
+    }
+
     func testChatToolResultsFeedFindBackAsSDKGlobCalls() throws {
         let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
         {
@@ -4440,6 +4505,79 @@ final class LocalAPIServerTests: XCTestCase {
         XCTAssertEqual(arguments["operation"] as? String, "create")
         XCTAssertEqual(arguments["absolutePath"] as? String, "src/App.jsx")
         XCTAssertEqual(arguments["text"] as? String, "export default function App() { return <main>Ref</main> }")
+    }
+
+    func testChatToolCallsMapSDKFileOperationsToCommandEnumsWithNouns() throws {
+        let prepared = try OpenAICompatibility.prepareChatRequest(Data(#"""
+        {
+          "model":"composer-2.5",
+          "messages":[{"role":"user","content":"use command style file operations"}],
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"workspace_file",
+                "parameters":{
+                  "type":"object",
+                  "properties":{
+                    "operation":{"type":"string","enum":["read_file","create_file","replace_text","delete_file"]},
+                    "filePath":{"type":"string"},
+                    "content":{"type":"string"},
+                    "oldText":{"type":"string"},
+                    "newText":{"type":"string"}
+                  },
+                  "required":["operation","filePath"],
+                  "additionalProperties":false
+                }
+              }
+            }
+          ]
+        }
+        """#.utf8))
+
+        let object = OpenAICompatibility.chatCompletionResponse(
+            id: "chatcmpl_test",
+            created: 1,
+            prepared: prepared,
+            output: CursorSDKOutput(text: "", toolCalls: [
+                CursorToolCall(name: "write", arguments: [
+                    "path": .string("src/App.jsx"),
+                    "fileText": .string("export default function App() { return null }")
+                ]),
+                CursorToolCall(name: "read", arguments: [
+                    "path": .string("src/App.jsx")
+                ]),
+                CursorToolCall(name: "edit", arguments: [
+                    "path": .string("src/App.jsx"),
+                    "oldString": .string("return null"),
+                    "newString": .string("return <main />")
+                ]),
+                CursorToolCall(name: "delete", arguments: [
+                    "path": .string("src/old.jsx")
+                ])
+            ], agentID: "agent-test", runID: "run-test")
+        )
+
+        let choices = try XCTUnwrap(object["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+        let toolCalls = try XCTUnwrap(message["tool_calls"] as? [[String: Any]])
+        XCTAssertEqual(toolCalls.count, 4)
+
+        let functions = try toolCalls.map { try XCTUnwrap($0["function"] as? [String: Any]) }
+        let arguments = try functions.map(decodedArguments)
+
+        XCTAssertEqual(functions.map { $0["name"] as? String }, Array(repeating: "workspace_file", count: 4))
+        XCTAssertEqual(arguments[0]["operation"] as? String, "create_file")
+        XCTAssertEqual(arguments[0]["filePath"] as? String, "src/App.jsx")
+        XCTAssertEqual(arguments[0]["content"] as? String, "export default function App() { return null }")
+        XCTAssertEqual(arguments[1]["operation"] as? String, "read_file")
+        XCTAssertEqual(arguments[1]["filePath"] as? String, "src/App.jsx")
+        XCTAssertEqual(arguments[2]["operation"] as? String, "replace_text")
+        XCTAssertEqual(arguments[2]["filePath"] as? String, "src/App.jsx")
+        XCTAssertEqual(arguments[2]["oldText"] as? String, "return null")
+        XCTAssertEqual(arguments[2]["newText"] as? String, "return <main />")
+        XCTAssertEqual(arguments[3]["operation"] as? String, "delete_file")
+        XCTAssertEqual(arguments[3]["filePath"] as? String, "src/old.jsx")
     }
 
     func testChatToolCallsMapSDKCallsThroughInputSchemaWrappers() throws {
