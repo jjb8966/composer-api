@@ -1225,10 +1225,18 @@ function clientToolPayloadIsComplete(toolName, payload, clientTools = []) {
 
 function mcpClientToolPayloadIsComplete(args, clientTools = []) {
   const tool = matchingClientToolForMcpCall(args, clientTools);
-  if (!tool) return false;
-  const payload = clientMcpPayloadArguments(args);
-  const schema = clientMcpInputSchema(tool.parameters);
-  return validateJsonSchemaValue(payload, schema, tool.name, schema) === null;
+  if (tool) {
+    const payload = clientMcpPayloadArguments(args);
+    const schema = clientMcpInputSchema(tool.parameters);
+    return validateJsonSchemaValue(payload, schema, tool.name, schema) === null;
+  }
+  const wrapper = matchingClientMcpWrapperTool(args, clientTools);
+  if (!wrapper) return false;
+  const schema = clientMcpInputSchema(wrapper.parameters);
+  const wrapperArgs = clientMcpWrapperArguments(args, schema);
+  if (!wrapperArgs) return false;
+  if (validateJsonSchemaValue(wrapperArgs, schema, wrapper.name, schema) === null) return true;
+  return mcpWrapperPayloadLooksComplete(args);
 }
 
 function matchingClientToolByName(toolName, clientTools = []) {
@@ -1249,6 +1257,113 @@ function matchingClientToolForMcpCall(args, clientTools = []) {
   }
   const normalizedCandidates = new Set([...candidates].map(normalizeToolName));
   return clientTools.find((tool) => normalizedCandidates.has(normalizeToolName(tool?.name))) || null;
+}
+
+function matchingClientMcpWrapperTool(args, clientTools = []) {
+  const provider = firstString(args, "providerIdentifier", "provider_identifier", "provider", "server", "serverName", "server_name");
+  const toolName = firstString(args, "toolName", "tool_name", "tool", "name");
+  if (!provider || !toolName) return null;
+  return clientTools.find((tool) => clientToolLooksLikeMcpWrapper(tool)) || null;
+}
+
+function clientToolLooksLikeMcpWrapper(tool) {
+  if (!tool || typeof tool.name !== "string") return false;
+  const schema = clientMcpInputSchema(tool.parameters);
+  const properties = isRecord(schema.properties) ? Object.keys(schema.properties) : [];
+  return Boolean(
+    schemaPropertyName(properties, mcpProviderKeys())
+    && schemaPropertyName(properties, mcpToolNameKeys())
+    && schemaPropertyName(properties, mcpPayloadKeys())
+  );
+}
+
+function clientMcpWrapperArguments(args, schema) {
+  const properties = isRecord(schema.properties) ? Object.keys(schema.properties) : [];
+  const providerKey = schemaPropertyName(properties, mcpProviderKeys());
+  const toolKey = schemaPropertyName(properties, mcpToolNameKeys());
+  const payloadKey = schemaPropertyName(properties, mcpPayloadKeys());
+  if (!providerKey || !toolKey || !payloadKey) return null;
+  const provider = firstString(args, ...mcpProviderKeys());
+  const toolName = firstString(args, ...mcpToolNameKeys());
+  if (!provider || !toolName) return null;
+  return {
+    [providerKey]: provider,
+    [toolKey]: toolName,
+    [payloadKey]: clientMcpPayloadArguments(args)
+  };
+}
+
+function mcpWrapperPayloadLooksComplete(args) {
+  const toolName = canonicalToolName(firstString(args, ...mcpToolNameKeys()));
+  const payload = clientMcpPayloadArguments(args);
+  switch (toolName) {
+    case "write":
+    case "writefile":
+    case "create":
+    case "createfile":
+    case "overwrite":
+    case "overwritefile":
+      return hasString(payload, "path", "filePath", "file_path", "targetFile", "target_file")
+        && hasStringAllowEmpty(payload, "fileText", "file_text", "content", "contents", "text", "data");
+    case "edit":
+    case "editfile":
+    case "replace":
+    case "replacefile":
+    case "strreplace":
+    case "strreplacefile":
+      return hasString(payload, "path", "filePath", "file_path", "targetFile", "target_file")
+        && (
+          hasStringAllowEmpty(payload, "patchContent", "patch_content", "streamContent", "stream_content")
+          || (
+            hasStringAllowEmpty(payload, "oldText", "old_text", "oldString", "old_string", "old_str")
+            && hasStringAllowEmpty(payload, "newText", "new_text", "newString", "new_string", "replacement")
+          )
+        );
+    case "read":
+    case "readfile":
+    case "open":
+    case "openfile":
+    case "delete":
+    case "deletefile":
+    case "remove":
+    case "removefile":
+      return hasString(payload, "path", "filePath", "file_path", "targetFile", "target_file");
+    case "run":
+    case "runcommand":
+    case "shell":
+    case "bash":
+      return hasString(payload, "command", "cmd", "script", "input");
+    case "glob":
+    case "fileglob":
+    case "find":
+    case "findfile":
+    case "findfiles":
+      return hasString(payload, "globPattern", "glob_pattern", "pattern", "fileGlob", "file_glob", "includePattern", "include_pattern", "glob")
+        || hasGlobString(payload, "targetDirectory", "target_directory", "targeting", "path", "directory", "dir", "root", "basePath", "base_path");
+    case "grep":
+    case "search":
+    case "query":
+      return hasString(payload, "pattern", "query", "search", "regex");
+    default:
+      return false;
+  }
+}
+
+function schemaPropertyName(properties, keys) {
+  const normalizedKeys = new Set(keys.map(normalizeToolName));
+  return properties.find((property) => normalizedKeys.has(normalizeToolName(property))) || "";
+}
+
+function mcpProviderKeys() {
+  return ["providerIdentifier", "provider_identifier", "provider", "server", "serverName", "server_name"];
+}
+
+function mcpToolNameKeys() {
+  return ["toolName", "tool_name", "tool", "name"];
+}
+
+function mcpPayloadKeys() {
+  return ["args", "arguments", "input", "parameters", "params", "payload", "data"];
 }
 
 function mcpProviderNameVariants(provider) {

@@ -436,6 +436,103 @@ describe("Cursor SDK local-agent bridge", () => {
     expect(isForwardableSDKToolCall(complete, clientTools)).toBe(true);
   });
 
+  it("accepts provider-style SDK MCP calls through generic wrapper tools", () => {
+    const clientTools = [
+      {
+        name: "call_mcp_tool",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            serverName: { type: "string" },
+            toolName: { type: "string" },
+            input: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                mode: { type: "string", enum: ["create", "overwrite"] },
+                filePath: { type: "string" },
+                content: { type: "string" },
+                description: { type: "string" }
+              },
+              required: ["mode", "filePath", "content", "description"]
+            }
+          },
+          required: ["serverName", "toolName", "input"]
+        }
+      }
+    ];
+
+    const partial = normalizeSDKToolCall({
+      type: "mcp",
+      args: {
+        providerIdentifier: "filesystem",
+        toolName: "write_file",
+        args: { file_path: "src/App.tsx" }
+      }
+    }, clientTools);
+    const complete = normalizeSDKToolCall({
+      type: "mcp",
+      args: {
+        providerIdentifier: "filesystem",
+        toolName: "write_file",
+        args: {
+          file_path: "src/App.tsx",
+          contents: "export default function App() { return null }"
+        }
+      }
+    }, clientTools);
+
+    expect(isForwardableSDKToolCall(partial, clientTools)).toBe(false);
+    expect(isForwardableSDKToolCall(complete, clientTools)).toBe(true);
+  });
+
+  it("requires exact nested wrapper schemas for unknown provider-style SDK MCP tools", () => {
+    const clientTools = [
+      {
+        name: "call_mcp_tool",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            serverName: { type: "string" },
+            toolName: { type: "string" },
+            input: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                title: { type: "string", minLength: 1 },
+                body: { type: "string", minLength: 1 }
+              },
+              required: ["title", "body"]
+            }
+          },
+          required: ["serverName", "toolName", "input"]
+        }
+      }
+    ];
+
+    const partial = normalizeSDKToolCall({
+      type: "mcp",
+      args: {
+        providerIdentifier: "github",
+        toolName: "create_issue",
+        args: { title: "Bug" }
+      }
+    }, clientTools);
+    const complete = normalizeSDKToolCall({
+      type: "mcp",
+      args: {
+        providerIdentifier: "github",
+        toolName: "create_issue",
+        args: { title: "Bug", body: "Details" }
+      }
+    }, clientTools);
+
+    expect(isForwardableSDKToolCall(partial, clientTools)).toBe(false);
+    expect(isForwardableSDKToolCall(complete, clientTools)).toBe(true);
+  });
+
   it("exposes dynamic client tool schemas through the forwarding MCP server", () => {
     const tools = clientMcpToolDefinitions([
       {
