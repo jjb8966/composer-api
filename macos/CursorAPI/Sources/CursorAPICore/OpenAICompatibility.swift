@@ -1320,15 +1320,40 @@ public enum OpenAICompatibility {
         if let toolName {
             candidates.append(toolName)
         }
-        if let provider, let toolName {
-            candidates.append(contentsOf: [
-                "\(provider)__\(toolName)",
-                "\(provider)_\(toolName)",
-                "mcp__\(provider)__\(toolName)",
-                "mcp_\(provider)_\(toolName)"
-            ])
+        if let toolName {
+            for provider in mcpProviderNameVariants(provider) {
+                candidates.append(contentsOf: [
+                    "\(provider)__\(toolName)",
+                    "\(provider)_\(toolName)",
+                    "mcp__\(provider)__\(toolName)",
+                    "mcp_\(provider)_\(toolName)"
+                ])
+            }
         }
         return candidates
+    }
+
+    private static func mcpProviderNameVariants(_ provider: String?) -> [String] {
+        guard let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else {
+            return []
+        }
+        var variants: [String] = []
+        func append(_ value: String) {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !variants.contains(trimmed) else { return }
+            variants.append(trimmed)
+        }
+        append(provider)
+        for separator in [":", "/", "\\", "."] {
+            if let last = provider.split(separator: Character(separator)).last {
+                append(String(last))
+            }
+        }
+        let normalizedPrefixes = ["mcp__", "mcp_", "mcp-", "mcp:"]
+        for prefix in normalizedPrefixes where provider.lowercased().hasPrefix(prefix) {
+            append(String(provider.dropFirst(prefix.count)))
+        }
+        return variants
     }
 
     private static func normalizeArguments(

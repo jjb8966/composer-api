@@ -522,9 +522,9 @@ export function toOpenAiToolCalls(input: {
 }): OpenAiToolCall[] {
   return input.toolCalls.map((toolCall, offset) => {
     const index = (input.startIndex ?? 0) + offset;
-    const tool = resolveToolSpec(toolCall.name, input.tools ?? []);
+    const tool = resolveToolSpec(toolCall.name, toolCall.arguments ?? {}, input.tools ?? []);
     const name = tool?.name ?? toolCall.name;
-    const toolArguments = normalizeToolArguments(toolCall.arguments ?? {}, tool);
+    const toolArguments = normalizeToolArguments(toolCall.arguments ?? {}, tool, toolCall.name);
     return {
       id: `call_${input.responseId.replace(/[^A-Za-z0-9]/g, "").slice(-18)}_${index}`,
       type: "function",
@@ -1136,23 +1136,41 @@ function serializedToolCallLength(toolCalls: OpenAiToolCall[]): number {
   return toolCalls.reduce((sum, toolCall) => sum + toolCall.function.name.length + toolCall.function.arguments.length, 0);
 }
 
-function resolveToolSpec(emittedName: string, tools: OpenAiToolSpec[]): OpenAiToolSpec | undefined {
+function resolveToolSpec(emittedName: string, args: Record<string, unknown>, tools: OpenAiToolSpec[]): OpenAiToolSpec | undefined {
   const exact = tools.find((tool) => tool.name === emittedName);
   if (exact) return exact;
   const normalized = normalizeToolName(emittedName);
   const match = tools.find((tool) => normalizeToolName(tool.name) === normalized);
   if (match) return match;
   const candidates = toolNameAliases(normalized);
-  return tools.find((tool) => candidates.includes(normalizeToolName(tool.name)));
+  const alias = tools.find((tool) => candidates.includes(normalizeToolName(tool.name)));
+  if (alias) return alias;
+  if (canonicalToolName(emittedName) === "mcp") {
+    return resolveSpecificMCPTool(args, tools);
+  }
+  return undefined;
 }
 
 function normalizeToolName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function normalizeToolArguments(args: Record<string, unknown>, tool: OpenAiToolSpec | undefined): Record<string, unknown> {
+function canonicalToolName(value: string): string {
+  const normalized = normalizeToolName(value);
+  if (normalized === "callmcptool") return "mcp";
+  return normalized;
+}
+
+function normalizeToolArguments(args: Record<string, unknown>, tool: OpenAiToolSpec | undefined, emittedName = ""): Record<string, unknown> {
   const schema = toolParameterSchema(tool);
-  const argsToNormalize = expandToolArguments(args);
+  const emittedCanonical = canonicalToolName(emittedName);
+  const selectedCanonical = canonicalToolName(tool?.name || "");
+  if (emittedCanonical === "mcp" && selectedCanonical === "mcp") {
+    return normalizeMCPWrapperArguments(args, schema);
+  }
+  const argsToNormalize = emittedCanonical === "mcp"
+    ? expandToolArguments(recordArgumentValue(args.args) ?? {})
+    : expandToolArguments(args);
   if (!schema.properties.length) return argsToNormalize;
 
   const normalizedProperties = new Map(schema.properties.map((property) => [normalizeToolName(property), property]));
@@ -1171,6 +1189,70 @@ function normalizeToolArguments(args: Record<string, unknown>, tool: OpenAiToolS
     }
   }
   return sanitizeNormalizedToolArguments(applyRequiredToolDefaults(output, schema.required, tool, argsToNormalize), tool, argsToNormalize);
+}
+
+function resolveSpecificMCPTool(args: Record<string, unknown>, tools: OpenAiToolSpec[]): OpenAiToolSpec | undefined {
+  const normalizedCandidates = new Set(mcpToolNameCandidates(args).map(normalizeToolName));
+  if (!normalizedCandidates.size) return undefined;
+  return tools.find((tool) => {
+    const normalizedTool = normalizeToolName(tool.name);
+    if (normalizedCandidates.has(normalizedTool)) return true;
+    return Array.from(normalizedCandidates).some((candidate) => normalizedTool.endsWith(candidate));
+  });
+}
+
+function mcpToolNameCandidates(args: Record<string, unknown>): string[] {
+  const provider = firstStringArg(args, "providerIdentifier", "provider_identifier", "provider", "server", "serverName", "server_name");
+  const toolName = firstStringArg(args, "toolName", "tool_name", "tool", "name");
+  const candidates: string[] = [];
+  if (toolName) candidates.push(toolName);
+  if (toolName) {
+    for (const providerName of mcpProviderNameVariants(provider)) {
+      candidates.push(
+        `${providerName}__${toolName}`,
+        `${providerName}_${toolName}`,
+        `mcp__${providerName}__${toolName}`,
+        `mcp_${providerName}_${toolName}`
+      );
+    }
+  }
+  return candidates;
+}
+
+function mcpProviderNameVariants(provider: string | undefined): string[] {
+  if (!provider?.trim()) return [];
+  const variants: string[] = [];
+  const append = (value: string | undefined) => {
+    const trimmed = value?.trim();
+    if (trimmed && !variants.includes(trimmed)) variants.push(trimmed);
+  };
+  append(provider);
+  for (const separator of [":", "/", "\\", "."]) {
+    append(provider.split(separator).filter(Boolean).pop());
+  }
+  for (const prefix of ["mcp__", "mcp_", "mcp-", "mcp:"]) {
+    if (provider.toLowerCase().startsWith(prefix)) append(provider.slice(prefix.length));
+  }
+  return variants;
+}
+
+function normalizeMCPWrapperArguments(
+  args: Record<string, unknown>,
+  schema: { properties: string[]; required: string[]; allowAdditionalProperties: boolean }
+): Record<string, unknown> {
+  if (!schema.properties.length) return args;
+  const normalizedProperties = new Map(schema.properties.map((property) => [normalizeToolName(property), property]));
+  const output: Record<string, unknown> = {};
+  const serverKey = firstMatchingProperty(["serverName", "server", "provider", "providerIdentifier", "provider_identifier"], schema.properties, normalizedProperties);
+  const toolKey = firstMatchingProperty(["toolName", "tool", "name", "tool_name"], schema.properties, normalizedProperties);
+  const argsKey = firstMatchingProperty(["arguments", "args", "input", "params", "parameters"], schema.properties, normalizedProperties);
+  const serverName = firstStringArg(args, "providerIdentifier", "provider_identifier", "provider", "server", "serverName", "server_name");
+  const toolName = firstStringArg(args, "toolName", "tool_name", "tool", "name");
+  const payload = recordArgumentValue(args.args) ?? {};
+  if (serverKey && serverName) output[serverKey] = serverName;
+  if (toolKey && toolName) output[toolKey] = toolName;
+  if (argsKey) output[argsKey] = payload;
+  return Object.keys(output).length ? output : args;
 }
 
 function toolParameterSchema(tool: OpenAiToolSpec | undefined): {
@@ -1471,6 +1553,7 @@ function toolNameAliases(normalized: string): string[] {
     terminal: ["bash", "shell"],
     ls: ["list"],
     list: ["ls"],
+    mcp: ["callmcptool"],
     writefile: ["write"]
   };
   return aliases[normalized] ?? [];

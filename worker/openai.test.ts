@@ -385,6 +385,86 @@ describe("OpenAI compatibility adapter", () => {
     ]);
   });
 
+  it("maps Cursor SDK MCP calls to OpenCode server_tool functions", () => {
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "probe_write_file",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              file_path: { type: "string" },
+              contents: { type: "string" },
+              overwrite: { type: "boolean" }
+            },
+            required: ["file_path", "contents"]
+          }
+        }
+      ],
+      toolCalls: [
+        {
+          name: "mcp",
+          arguments: {
+            providerIdentifier: "probe",
+            toolName: "write_file",
+            args: {
+              file_path: "src/App.tsx",
+              contents: "export default function App() { return null }",
+              overwrite: true
+            }
+          }
+        }
+      ]
+    });
+
+    expect(toolCalls[0].function.name).toBe("probe_write_file");
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+      file_path: "src/App.tsx",
+      contents: "export default function App() { return null }",
+      overwrite: true
+    });
+  });
+
+  it("maps Cursor SDK MCP calls to generic wrapper functions", () => {
+    const toolCalls = toOpenAiToolCalls({
+      responseId: "chatcmpl_test",
+      tools: [
+        {
+          name: "call_mcp_tool",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              serverName: { type: "string" },
+              toolName: { type: "string" },
+              arguments: { type: "object" }
+            },
+            required: ["serverName", "toolName", "arguments"]
+          }
+        }
+      ],
+      toolCalls: [
+        {
+          name: "mcp",
+          arguments: {
+            providerIdentifier: "filesystem",
+            toolName: "write_file",
+            args: { file_path: "src/App.tsx", contents: "ok" }
+          }
+        }
+      ]
+    });
+
+    expect(toolCalls[0].function.name).toBe("call_mcp_tool");
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+      serverName: "filesystem",
+      toolName: "write_file",
+      arguments: { file_path: "src/App.tsx", contents: "ok" }
+    });
+  });
+
   it("drops synthetic SDK shell workdirs so OpenCode uses its local cwd", () => {
     const toolCalls = toOpenAiToolCalls({
       responseId: "chatcmpl_test",
