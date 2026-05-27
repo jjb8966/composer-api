@@ -148,6 +148,39 @@ describe("OpenAI compatibility adapter", () => {
     expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: "**/*.tsx", path: "src" });
   });
 
+  it("keeps direct chat tools on direct tool-call syntax", () => {
+    const prepared = prepareChatRequest(
+      {
+        model: "composer-2.5",
+        messages: [{ role: "user", content: "Use the webfetch tool to fetch https://example.com" }],
+        tool_choice: { type: "function", function: { name: "webfetch" } },
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "webfetch",
+              description: "Fetch a URL",
+              parameters: {
+                type: "object",
+                properties: {
+                  url: { type: "string" },
+                  format: { type: "string" }
+                },
+                required: ["url"]
+              }
+            }
+          }
+        ]
+      },
+      { id: "composer-2.5" }
+    );
+
+    expect(prepared.prompt.text).toContain("CLIENT TOOL INVENTORY:");
+    expect(prepared.prompt.text).toContain("Use the webfetch tool if you call a tool.");
+    expect(prepared.prompt.text).not.toContain("sdk_mcp");
+    expect(prepared.prompt.text).not.toContain("Use SDK mcp now");
+  });
+
   it("advertises single-word non-builtin client tools through synthetic SDK MCP targets", () => {
     const prepared = prepareOpencodeSdkChatRequest(
       {

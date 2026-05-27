@@ -741,10 +741,10 @@ function appendChatTools(transcript: string[], tools: OpenAiToolSpec[], toolChoi
     "Do not call switch_mode; that setup already completed."
   );
   for (const tool of tools) {
-    transcript.push(JSON.stringify(toolInventoryRecord(tool)));
+    transcript.push(JSON.stringify(toolInventoryRecord(tool, { includeSdkMcp: false })));
   }
   if (isRecord(toolChoice) && toolChoice.type === "function" && isRecord(toolChoice.function) && typeof toolChoice.function.name === "string") {
-    transcript.push(requestedToolHint(toolChoice.function.name));
+    transcript.push(directToolChoiceHint(toolChoice.function.name));
   } else if (toolChoice === "required") {
     transcript.push("You must call at least one tool.");
   }
@@ -765,7 +765,7 @@ function appendResponsesToolInventory(transcript: string[], tools: OpenAiToolSpe
     transcript.push("A shell client tool is available. For general file creation or overwrite requests, prefer an SDK shell call using mkdir -p and a quoted heredoc.");
   }
   for (const tool of tools) {
-    transcript.push(JSON.stringify(toolInventoryRecord(tool)));
+    transcript.push(JSON.stringify(toolInventoryRecord(tool, { includeSdkMcp: true })));
   }
   const selected = toolChoiceFunctionName(toolChoice);
   if (selected) {
@@ -786,7 +786,7 @@ function appendSdkToolInventory(transcript: string[], tools: OpenAiToolSpec[], t
     "For general local work, prefer shell/read/write/edit/glob/grep/ls style tool requests when those capabilities are present."
   );
   for (const tool of tools) {
-    transcript.push(JSON.stringify(toolInventoryRecord(tool)));
+    transcript.push(JSON.stringify(toolInventoryRecord(tool, { includeSdkMcp: true })));
   }
   if (isRecord(toolChoice) && toolChoice.type === "function" && isRecord(toolChoice.function) && typeof toolChoice.function.name === "string") {
     transcript.push(requestedToolHint(toolChoice.function.name));
@@ -795,8 +795,8 @@ function appendSdkToolInventory(transcript: string[], tools: OpenAiToolSpec[], t
   }
 }
 
-function toolInventoryRecord(tool: OpenAiToolSpec): Record<string, unknown> {
-  const target = mcpTargetForClientToolName(tool.name);
+function toolInventoryRecord(tool: OpenAiToolSpec, options: { includeSdkMcp: boolean }): Record<string, unknown> {
+  const target = options.includeSdkMcp ? mcpTargetForClientToolName(tool.name) : undefined;
   return {
     name: tool.name,
     ...(tool.description ? { description: tool.description } : {}),
@@ -811,6 +811,10 @@ function toolInventoryRecord(tool: OpenAiToolSpec): Record<string, unknown> {
         }
       : {})
   };
+}
+
+function directToolChoiceHint(toolName: string): string {
+  return `Use the ${toolName} tool if you call a tool.`;
 }
 
 function appendResponsesWorkspaceMutationRequirement(
