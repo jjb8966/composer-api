@@ -35,7 +35,7 @@ set_file_secret() {
   local path="$SECRETS_DIR/$file_name"
 
   require_file "$path"
-  gh secret set "$name" --repo "$REPO" --body-file "$path" >/dev/null
+  gh secret set "$name" --repo "$REPO" < "$path" >/dev/null
   echo "Set $name"
 }
 
@@ -43,7 +43,7 @@ set_value_secret() {
   local name="$1"
   local value="$2"
 
-  printf '%s' "$value" | gh secret set "$name" --repo "$REPO" --body-file - >/dev/null
+  printf '%s' "$value" | gh secret set "$name" --repo "$REPO" >/dev/null
   echo "Set $name"
 }
 
