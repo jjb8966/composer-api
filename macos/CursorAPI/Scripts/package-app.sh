@@ -628,6 +628,33 @@ $SPARKLE_KEY_PLIST
 </dict>
 </plist>
 PLIST
+
+codesign_one() {
+  local path="$1"
+  if [ "$CODE_SIGN_IDENTITY" = "-" ]; then
+    codesign --force --sign - "$path" >/dev/null
+  else
+    codesign --force --options runtime --timestamp --sign "$CODE_SIGN_IDENTITY" "$path" >/dev/null
+  fi
+}
+
+sign_nested_native_code() {
+  local root="$1"
+  local signed=0
+
+  while IFS= read -r -d '' path; do
+    if file -b "$path" | grep -q 'Mach-O'; then
+      codesign_one "$path"
+      signed=$((signed + 1))
+    fi
+  done < <(find "$root" -type f -print0)
+
+  if [ "$signed" -gt 0 ]; then
+    echo "Signed $signed nested native resource file(s)"
+  fi
+}
+
+sign_nested_native_code "$RESOURCES_DIR"
 if [ "$CODE_SIGN_IDENTITY" = "-" ]; then
   codesign --force --deep --sign - "$FRAMEWORKS_DIR/Sparkle.framework" >/dev/null
   codesign --force --deep --sign - "$APP_DIR" >/dev/null
