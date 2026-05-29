@@ -123,7 +123,12 @@ export function hydrateIcons(root: QueryRoot = document): void {
     const node = icons[pascal];
     if (node) {
       const size = el.dataset.size ? Number(el.dataset.size) : 18;
-      el.outerHTML = iconToSvg(node, { width: size, height: size });
+      const className = el.getAttribute("class");
+      el.outerHTML = iconToSvg(node, {
+        width: size,
+        height: size,
+        ...(className ? { class: className } : {})
+      });
     }
   }
 }
