@@ -335,7 +335,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 20px;
-  width: min(1080px, 100%);
+  width: min(1120px, 100%);
   padding: 6px 6px 6px 14px;
   border-radius: 999px;
   transition: box-shadow 0.3s ease, background 0.3s ease;
