@@ -814,13 +814,13 @@ struct PillActionButton: View {
             Text(title)
                 .font(.body)
                 .lineLimit(1)
-                .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.65))
+                .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.86))
                 .padding(.horizontal, 14)
                 .frame(minHeight: 30)
                 .background(backgroundColor)
                 .clipShape(Capsule())
                 .contentShape(Capsule())
-                .opacity(isEnabled ? 1 : 0.55)
+                .opacity(isEnabled ? 1 : 0.88)
         }
         .buttonStyle(.plain)
         .focusable(false)
@@ -833,7 +833,7 @@ struct PillActionButton: View {
 
     private var backgroundColor: Color {
         if !isEnabled {
-            return Color.primary.opacity(0.045)
+            return Color.primary.opacity(0.075)
         }
         return Color.primary.opacity(isHovering ? 0.12 : 0.08)
     }

@@ -52,8 +52,19 @@ elif [ -x "$RESOURCES_DIR/bun" ]; then
 else
   fail "bundled bridge runtime is missing or not executable"
 fi
-"$BRIDGE_RUNTIME_PATH" -e 'import http2 from "node:http2"; if (typeof http2.connect !== "function") process.exit(1)' >/dev/null \
-  || fail "bundled bridge runtime cannot load node:http2"
+BRIDGE_RUNTIME_PATH="$(cd "$(dirname "$BRIDGE_RUNTIME_PATH")" && pwd)/$(basename "$BRIDGE_RUNTIME_PATH")"
+(
+  cd "$RESOURCES_DIR"
+  "$BRIDGE_RUNTIME_PATH" -e '
+    Promise.all([import("node:http2"), import("@cursor/sdk")])
+      .then(([http2, sdk]) => {
+        if (typeof http2.connect !== "function" || typeof sdk.Agent?.create !== "function") {
+          process.exit(1);
+        }
+      })
+      .catch(() => process.exit(1));
+  ' >/dev/null
+) || fail "bundled bridge runtime cannot load node:http2 and @cursor/sdk"
 [ -s "$RESOURCES_DIR/APIForCursor.icns" ] || fail "app icon is missing"
 [ -s "$RESOURCES_DIR/APIForCursor.png" ] || fail "runtime app icon PNG is missing"
 ICON_VERIFY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/api-for-cursor-icon.XXXXXX")"

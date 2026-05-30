@@ -10,6 +10,7 @@ interface MakeEnvOptions {
   notaryWebhookToken?: string;
   githubReleaseDispatchToken?: string;
   githubReleaseRepository?: string;
+  waitlistApiToken?: string | null;
 }
 
 function makeEnv(
@@ -32,7 +33,8 @@ function makeEnv(
     CURSOR_SDK_CLIENT_VERSION: "sdk-test",
     NOTARY_WEBHOOK_TOKEN: options.notaryWebhookToken,
     GITHUB_RELEASE_DISPATCH_TOKEN: options.githubReleaseDispatchToken,
-    GITHUB_RELEASE_REPOSITORY: options.githubReleaseRepository
+    GITHUB_RELEASE_REPOSITORY: options.githubReleaseRepository,
+    WAITLIST_API_TOKEN: options.waitlistApiToken === null ? undefined : options.waitlistApiToken ?? "waitlist-token"
   };
 }
 
@@ -179,6 +181,70 @@ describe("Worker", () => {
     expect(response.status).toBe(204);
     expect(response.headers.get("access-control-allow-headers")).toContain("x-session-affinity");
     expect(response.headers.get("access-control-allow-headers")).toContain("x-opencode-session-id");
+  });
+
+  it("submits Standard Agents early access through the waitlist token", async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db, { waitlistApiToken: "secret-waitlist-token" });
+    const waitlistRequests: Array<{ url: string; auth: string; body: unknown }> = [];
+    const { deps } = fakeDeps({
+      fetch: async (input, init) => {
+        waitlistRequests.push({
+          url: input instanceof Request ? input.url : input.toString(),
+          auth: new Headers(init?.headers).get("authorization") || "",
+          body: JSON.parse(String(init?.body || "{}"))
+        });
+        return Response.json({ ok: true });
+      }
+    });
+
+    const response = await handleRequest(
+      new Request("https://composer.test/api/early-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Ada Lovelace", email: "ada@example.com" })
+      }),
+      env,
+      fakeCtx(),
+      deps
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(waitlistRequests).toEqual([
+      {
+        url: "https://agents.standardagentbuilder.com/api/waitlist",
+        auth: "Bearer secret-waitlist-token",
+        body: { name: "Ada Lovelace", email: "ada@example.com", source: "cursor-api" }
+      }
+    ]);
+  });
+
+  it("requires the Standard Agents waitlist token for early access submissions", async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db, { waitlistApiToken: null });
+    const { deps } = fakeDeps({
+      fetch: async () => {
+        throw new Error("waitlist should not be called without token");
+      }
+    });
+
+    const response = await handleRequest(
+      new Request("https://composer.test/api/early-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Ada Lovelace", email: "ada@example.com" })
+      }),
+      env,
+      fakeCtx(),
+      deps
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "Could not reach the early access list. Please try again shortly."
+    });
   });
 
   it("serves current stable Vite assets for stale hashed asset URLs", async () => {

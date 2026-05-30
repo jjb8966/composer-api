@@ -1,7 +1,6 @@
 import type { Deps, Env } from "./types";
 
 const WAITLIST_API = "https://agents.standardagentbuilder.com/api/waitlist";
-const WAITLIST_FALLBACK_API = "https://token-costs.standardagents.ai/api/early-access";
 
 export async function submitWaitlist(
   env: Env,
@@ -13,12 +12,8 @@ export async function submitWaitlist(
   if (!name || !email) return false;
   try {
     if (!env.WAITLIST_API_TOKEN) {
-      const fallback = await deps.fetch(WAITLIST_FALLBACK_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email })
-      });
-      return fallback.ok;
+      console.error("[early-access] WAITLIST_API_TOKEN is not set");
+      return false;
     }
     const response = await deps.fetch(WAITLIST_API, {
       method: "POST",

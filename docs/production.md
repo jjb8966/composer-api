@@ -6,7 +6,7 @@ API for Cursor ships as a signed macOS DMG and updates through Sparkle.
 
 - GitHub Actions builds the app bundle from `macos/CursorAPI`.
 - `package-app.sh --release` embeds Sparkle, the local SDK bridge, production metadata, and the appcast URL.
-- The package script bundles Bun by default for a smaller bridge runtime, with Node as the fallback.
+- The package script bundles Node by default for the local SDK bridge, with Bun as the fallback.
 - `create-dmg.sh` creates a compressed DMG with the app and `/Applications` shortcut.
 - `notarize-dmg.sh` submits the DMG to Apple and staples the ticket.
 - `generate-appcast.sh` signs the update with Sparkle EdDSA and writes `appcast.xml`.
@@ -57,10 +57,13 @@ The old hosted API domain remains configured until the cutover is verified. Do n
 For webhook-based notarization finalization, configure these Worker secrets:
 
 ```bash
+npx wrangler secret put WAITLIST_API_TOKEN
 npx wrangler secret put NOTARY_WEBHOOK_TOKEN
 npx wrangler secret put GITHUB_RELEASE_DISPATCH_TOKEN
 ```
 
+`WAITLIST_API_TOKEN` forwards Standard Agents early-access submissions to the
+shared waitlist API.
 `NOTARY_WEBHOOK_TOKEN` must match the GitHub secret with the same name.
 `GITHUB_RELEASE_DISPATCH_TOKEN` should be a fine-grained GitHub token that can
 create repository dispatch events for `standardagents/composer-api`. The Worker

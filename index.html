@@ -99,10 +99,30 @@
             </ul>
 
             <p class="hero-copy">
-              API for Cursor is a native MacOS app that leverages Cursor's Agent SDK to produce
-              a standard OpenAI compatible API. Import Composer as a model into OpenCode, Codex,
-              or your own harness with a single click.
+              API for Cursor is an open source native MacOS app that leverages Cursor's Agent SDK
+              to produce a standard OpenAI compatible API. Import Composer as a model into
+              OpenCode, Codex, or your own harness with a single click.
             </p>
+
+            <a
+              class="repo-star-link"
+              href="https://github.com/standardagents/composer-api"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <svg
+                class="repo-star-icon"
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="m12 2.5 2.95 5.98 6.6.96-4.78 4.66 1.13 6.57L12 17.57l-5.9 3.1 1.13-6.57-4.78-4.66 6.6-.96L12 2.5Z" />
+              </svg>
+              <span><strong>91</strong> - Star the repo</span>
+            </a>
 
             <div class="hero-actions">
               <a class="btn btn-primary btn-lg" href="/download">
@@ -246,6 +266,43 @@
         </div>
       </section>
 
+      <section id="standard-agents" class="standard-agents" aria-labelledby="standard-agents-title">
+        <div class="standard-agents-inner" data-reveal>
+          <div class="standard-agents-copy">
+            <span class="standard-agents-mark" aria-hidden="true">
+              <img src="/standard-agents-mark-white.svg" alt="" width="28" height="28" loading="lazy" />
+            </span>
+            <p class="kicker">Standard Agents</p>
+            <h2 id="standard-agents-title">What is Standard Agents?</h2>
+            <p>
+              Standard Agents is an open standard for creating domain-specific agents that can
+              be distributed, composed, and run across different harnesses. API for Cursor is
+              one example: a local app that turns Cursor's Agent SDK into a standard model API.
+            </p>
+          </div>
+
+          <form class="early-access-form" data-standard-agents-form>
+            <div class="early-access-heading">
+              <span>Early Access</span>
+              <strong>Build with the standard.</strong>
+            </div>
+            <label>
+              <span>Name</span>
+              <input name="name" type="text" autocomplete="name" required />
+            </label>
+            <label>
+              <span>Email</span>
+              <input name="email" type="email" autocomplete="email" required />
+            </label>
+            <button class="btn btn-primary" type="submit">
+              <span data-standard-agents-submit-label>Request early access</span>
+              <i data-lucide="arrow-right" data-size="16"></i>
+            </button>
+            <p class="early-access-message" data-standard-agents-message role="status" aria-live="polite"></p>
+          </form>
+        </div>
+      </section>
+
       <footer class="site-footer">
         <div class="footer-inner glass">
           <a class="brand" href="/" aria-label="API for Cursor">
@@ -257,6 +314,7 @@
             <a href="#features">Features</a>
             <a href="#agents">Agents</a>
             <a href="#endpoints">Endpoints</a>
+            <a href="#standard-agents">Standard Agents</a>
             <a href="/download">Download</a>
           </div>
         </div>

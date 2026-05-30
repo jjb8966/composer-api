@@ -48,6 +48,7 @@ function mountLanding(): void {
   bindEndpointModal();
   bindHeaderScroll();
   bindScrollReveal();
+  bindStandardAgentsForm();
 }
 
 /** Toggle a shadow on the floating header once the page scrolls. */
@@ -112,6 +113,56 @@ function bindEndpointModal(): void {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !modal.hidden) setOpen(false);
+  });
+}
+
+function bindStandardAgentsForm(): void {
+  const form = document.querySelector<HTMLFormElement>("[data-standard-agents-form]");
+  if (!form) return;
+  const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  const label = form.querySelector<HTMLElement>("[data-standard-agents-submit-label]");
+  const message = form.querySelector<HTMLElement>("[data-standard-agents-message]");
+
+  const setMessage = (text: string, state: "idle" | "success" | "error" = "idle"): void => {
+    if (!message) return;
+    message.textContent = text;
+    message.classList.toggle("is-success", state === "success");
+    message.classList.toggle("is-error", state === "error");
+  };
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const name = String(data.get("name") || "").trim();
+    const email = String(data.get("email") || "").trim();
+    if (!name || !email) {
+      setMessage("Enter your name and email.", "error");
+      return;
+    }
+
+    button?.setAttribute("disabled", "true");
+    if (label) label.textContent = "Requesting...";
+    setMessage("");
+
+    try {
+      const response = await fetch("/api/early-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email })
+      });
+      const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } | string };
+      if (!response.ok) {
+        const error = typeof body.error === "string" ? body.error : body.error?.message;
+        throw new Error(error || "Could not join the early access list.");
+      }
+      form.reset();
+      setMessage("You're on the list. We'll be in touch.", "success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not join the early access list.", "error");
+    } finally {
+      button?.removeAttribute("disabled");
+      if (label) label.textContent = "Request early access";
+    }
   });
 }
 

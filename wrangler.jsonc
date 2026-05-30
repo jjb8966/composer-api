@@ -75,10 +75,11 @@
   // ENCRYPTION_KEY - 32+ random bytes as hex/base64/plain text, used to encrypt Cursor API keys at rest.
   // CURSOR_BACKEND_BASE_URL - configured as a secret for the legacy chat transport.
   // CURSOR_CHAT_ENDPOINT - configured as a secret for the legacy chat transport.
+  // Required secret:
+  // WAITLIST_API_TOKEN - bearer token for https://agents.standardagentbuilder.com/api/waitlist.
   // Optional secret:
   // CURSOR_SDK_BRIDGE_URL - HTTPS URL for an external Node or Bun SDK bridge.
   // CURSOR_SDK_BRIDGE_TOKEN - bearer token shared with the SDK bridge.
   // NOTARY_WEBHOOK_TOKEN - unguessable token in the Apple notarization webhook URL.
   // GITHUB_RELEASE_DISPATCH_TOKEN - fine-grained GitHub token that can create repository dispatch events.
-  // WAITLIST_API_TOKEN - bearer token for https://agents.standardagentbuilder.com/api/waitlist.
 }

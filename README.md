@@ -100,7 +100,7 @@ Create a local `.dev.vars` file:
 
 ```bash
 ENCRYPTION_KEY="replace-with-a-long-random-secret"
-WAITLIST_API_TOKEN="optional-standard-agents-waitlist-token"
+WAITLIST_API_TOKEN="standard-agents-waitlist-token"
 CURSOR_SDK_BRIDGE_URL="optional-external-node-sdk-bridge-url"
 CURSOR_SDK_BRIDGE_TOKEN="optional-external-shared-bridge-token"
 CURSOR_SDK_BRIDGE_TIMEOUT_MS="180000"
@@ -117,8 +117,8 @@ npm run sdk:opencode-bridge
 The bridge process also accepts `CURSOR_SDK_BRIDGE_RUN_TIMEOUT_MS`; the default is
 `180000`.
 
-Release packages prefer a bundled Bun runtime for the local SDK bridge and fall
-back to Node when Bun is unavailable.
+Release packages prefer a bundled Node runtime for the local SDK bridge and fall
+back to Bun when Node is unavailable.
 
 ## Cloudflare
 
@@ -141,6 +141,7 @@ Required secrets:
 wrangler secret put ENCRYPTION_KEY
 wrangler secret put CURSOR_BACKEND_BASE_URL
 wrangler secret put CURSOR_CHAT_ENDPOINT
+wrangler secret put WAITLIST_API_TOKEN
 ```
 
 The OpenCode SDK harness also requires the `0002_sdk_sessions.sql` migration so
@@ -157,12 +158,6 @@ Optional SDK harness overrides:
 wrangler secret put CURSOR_SDK_CLIENT_VERSION
 wrangler secret put CURSOR_SDK_BRIDGE_URL
 wrangler secret put CURSOR_SDK_BRIDGE_TOKEN
-```
-
-Optional secret for direct waitlist writes. If omitted, the Worker falls back to the deployed token-cost early-access endpoint.
-
-```bash
-wrangler secret put WAITLIST_API_TOKEN
 ```
 
 ## Research sources
