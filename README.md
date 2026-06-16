@@ -2,7 +2,7 @@
 
 Local OpenAI-compatible `chat.completions` and `responses` endpoints backed by Cursor Composer.
 
-Download site: https://api-for-composer.standardagents.ai
+Download site: https://api-for-cursor.standardagents.ai
 
 ## What this is
 

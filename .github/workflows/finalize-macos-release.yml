@@ -45,8 +45,8 @@ jobs:
     runs-on: macos-15
     env:
       R2_RELEASE_BUCKET: api-for-composer-releases
-      CURSOR_API_APPCAST_URL: https://api-for-composer.standardagents.ai/appcast.xml
-      CURSOR_API_RELEASE_BASE_URL: https://api-for-composer.standardagents.ai/releases
+      CURSOR_API_APPCAST_URL: https://api-for-cursor.standardagents.ai/appcast.xml
+      CURSOR_API_RELEASE_BASE_URL: https://api-for-cursor.standardagents.ai/releases
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

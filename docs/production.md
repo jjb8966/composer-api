@@ -44,9 +44,9 @@ npx wrangler r2 bucket create api-for-composer-releases
 
 The Worker binding is named `RELEASES`, and the public routes are:
 
-- `https://api-for-composer.standardagents.ai/download`
-- `https://api-for-composer.standardagents.ai/appcast.xml`
-- `https://api-for-composer.standardagents.ai/releases/<dmg-name>`
+- `https://api-for-cursor.standardagents.ai/download`
+- `https://api-for-cursor.standardagents.ai/appcast.xml`
+- `https://api-for-cursor.standardagents.ai/releases/<dmg-name>`
 
 Release workflows must pass `--remote` to `wrangler r2 object put`; without it,
 Wrangler writes to the local development R2 store and the public routes continue

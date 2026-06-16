@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="${API_FOR_CURSOR_PUBLIC_BASE_URL:-https://api-for-composer.standardagents.ai}"
+BASE_URL="${API_FOR_CURSOR_PUBLIC_BASE_URL:-https://api-for-cursor.standardagents.ai}"
 OLD_API_URL="${API_FOR_CURSOR_OLD_API_URL:-https://cursor-api.standardagents.ai/v1/models}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/api-for-cursor-release-check.XXXXXX")"
 

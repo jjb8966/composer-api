@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://api-for-composer.standardagents.ai/sitemap.xml
+Sitemap: https://api-for-cursor.standardagents.ai/sitemap.xml

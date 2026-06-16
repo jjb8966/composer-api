@@ -6,7 +6,7 @@ DIST_DIR="$ROOT_DIR/dist"
 DMG_PATH="${1:-}"
 APP_PATH="${2:-$DIST_DIR/API for Cursor.app}"
 APPCAST_PATH="${CURSOR_API_APPCAST_PATH:-$DIST_DIR/appcast.xml}"
-DOWNLOAD_BASE_URL="${CURSOR_API_RELEASE_BASE_URL:-https://api-for-composer.standardagents.ai/releases}"
+DOWNLOAD_BASE_URL="${CURSOR_API_RELEASE_BASE_URL:-https://api-for-cursor.standardagents.ai/releases}"
 SPARKLE_GENERATE_APPCAST="${SPARKLE_GENERATE_APPCAST:-}"
 SPARKLE_SIGN_UPDATE="${SPARKLE_SIGN_UPDATE:-}"
 SPARKLE_PRIVATE_KEY="${SPARKLE_PRIVATE_KEY:-}"
@@ -78,7 +78,7 @@ cat > "$APPCAST_PATH" <<XML
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <title>$(xml_escape "$APP_NAME") Updates</title>
-    <link>https://api-for-composer.standardagents.ai/</link>
+    <link>https://api-for-cursor.standardagents.ai/</link>
     <description>Updates for $(xml_escape "$APP_NAME").</description>
     <item>
       <title>$(xml_escape "$APP_NAME") $(xml_escape "$APP_VERSION")</title>

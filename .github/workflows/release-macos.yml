@@ -24,8 +24,8 @@ jobs:
     runs-on: macos-15
     env:
       R2_RELEASE_BUCKET: api-for-composer-releases
-      CURSOR_API_APPCAST_URL: https://api-for-composer.standardagents.ai/appcast.xml
-      CURSOR_API_RELEASE_BASE_URL: https://api-for-composer.standardagents.ai/releases
+      CURSOR_API_APPCAST_URL: https://api-for-cursor.standardagents.ai/appcast.xml
+      CURSOR_API_RELEASE_BASE_URL: https://api-for-cursor.standardagents.ai/releases
       CURSOR_API_CODE_SIGN_IDENTITY: ${{ secrets.MACOS_CODE_SIGN_IDENTITY }}
       SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -165,7 +165,7 @@ jobs:
           from urllib.parse import quote, urlencode
 
           token = os.environ["NOTARY_WEBHOOK_TOKEN"]
-          base = "https://api-for-composer.standardagents.ai/api/notary/webhook"
+          base = "https://api-for-cursor.standardagents.ai/api/notary/webhook"
           params = {
               "version": os.environ["CURSOR_API_APP_VERSION"],
               "build": os.environ["CURSOR_API_APP_BUILD"],

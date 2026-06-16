@@ -60,8 +60,8 @@ const defaultDeps: Deps = {
   randomUUID: () => crypto.randomUUID()
 };
 
-const LEGACY_CURSOR_API_HOST = "cursor-api.standardagents.ai";
-const CANONICAL_PUBLIC_HOST = "api-for-composer.standardagents.ai";
+const LEGACY_PUBLIC_HOSTS = new Set(["api-for-composer.standardagents.ai", "cursor-api.standardagents.ai"]);
+const CANONICAL_PUBLIC_HOST = "api-for-cursor.standardagents.ai";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -116,7 +116,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 }
 
 function redirectLegacyCursorApiHost(url: URL): Response | null {
-  if (url.hostname !== LEGACY_CURSOR_API_HOST) return null;
+  if (!LEGACY_PUBLIC_HOSTS.has(url.hostname)) return null;
   const target = new URL(url.toString());
   target.hostname = CANONICAL_PUBLIC_HOST;
   return Response.redirect(target.toString(), 308);

@@ -64,7 +64,7 @@ jobs:
             SPARKLE_SIGN_UPDATE="$tools_dir/sign_update" \
             macos/CursorAPI/Scripts/generate-appcast.sh "${{ steps.dmg.outputs.path }}"
           )"
-          grep -q "${CURSOR_API_RELEASE_BASE_URL:-https://api-for-composer.standardagents.ai/releases}/" "$appcast_path"
+          grep -q "${CURSOR_API_RELEASE_BASE_URL:-https://api-for-cursor.standardagents.ai/releases}/" "$appcast_path"
           grep -q 'sparkle:edSignature=' "$appcast_path"
 
       - name: Upload DMG artifact

@@ -8,6 +8,8 @@
   "workers_dev": true,
   "routes": [
     { "pattern": "cursor-api.standardagents.ai", "custom_domain": true },
+    { "pattern": "api-for-cursor.standardagents.ai", "custom_domain": true },
+    { "pattern": "api-for-cursor.standardagents.ai/*", "zone_name": "standardagents.ai" },
     { "pattern": "api-for-composer.standardagents.ai", "custom_domain": true },
     { "pattern": "api-for-composer.standardagents.ai/*", "zone_name": "standardagents.ai" }
   ],

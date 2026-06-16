@@ -62,22 +62,32 @@ function fakeR2(objects: Record<string, { body: string; contentType?: string }>)
 }
 
 describe("Worker", () => {
-  it("redirects the legacy cursor-api host to the canonical public app host", async () => {
+  it("redirects legacy public hosts to the canonical public app host", async () => {
     const db = new FakeD1();
     const env = makeEnv(db, () => {
       throw new Error("assets should not be fetched for legacy host redirects");
     });
     const { deps } = fakeDeps();
 
-    const response = await handleRequest(
+    const cursorApiResponse = await handleRequest(
       new Request("https://cursor-api.standardagents.ai/chat?from=legacy"),
       env,
       fakeCtx(),
       deps
     );
 
-    expect(response.status).toBe(308);
-    expect(response.headers.get("location")).toBe("https://api-for-composer.standardagents.ai/chat?from=legacy");
+    expect(cursorApiResponse.status).toBe(308);
+    expect(cursorApiResponse.headers.get("location")).toBe("https://api-for-cursor.standardagents.ai/chat?from=legacy");
+
+    const composerResponse = await handleRequest(
+      new Request("https://api-for-composer.standardagents.ai/download"),
+      env,
+      fakeCtx(),
+      deps
+    );
+
+    expect(composerResponse.status).toBe(308);
+    expect(composerResponse.headers.get("location")).toBe("https://api-for-cursor.standardagents.ai/download");
   });
 
   it("redirects the public download URL to the latest DMG release object", async () => {
