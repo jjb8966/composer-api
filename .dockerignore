@@ -5,7 +5,7 @@ dist
 .env
 .env.*
 !.env.example
-wrangler.jsonc.upstream
-sample-projects/
-*.log
+.git
 .DS_Store
+*.log
+macos
