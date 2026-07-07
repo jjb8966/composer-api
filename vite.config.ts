@@ -3,6 +3,10 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [cloudflare()],
+  server: {
+    host: true,
+    allowedHosts: true
+  },
   build: {
     sourcemap: true,
     rollupOptions: {
